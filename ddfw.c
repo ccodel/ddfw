@@ -141,9 +141,11 @@
 
 static int timeout_secs = DEFAULT_TIMEOUT_SECS;  // Seconds until timeout
 
+/**
 static int reducing_cost_num = 0;
 static int reducing_cost_zero = 0;
 static int *reducing_cost_copy = NULL;
+**/
 
 ////////////////////////////////////////////////////////////////////////////////
 // DDFW algorithm implementation
@@ -173,8 +175,8 @@ static void find_cost_reducing_literals() {
   max_reducing_cost = 0.0;
 
   // TODO remove
-  reducing_cost_num = 0;
-  reducing_cost_zero = 0;
+  // reducing_cost_num = 0;
+  // reducing_cost_zero = 0;
 
   for (int i = 1; i <= num_vars; i++) {
     int l_idx = LIT_IDX(i);
@@ -189,6 +191,19 @@ static void find_cost_reducing_literals() {
     } else {
       l = &literals[not_l_idx];
       not_l = &literals[l_idx];
+    }
+
+    // Check if the literal has been marked already
+    if (IS_RED_COST_POS(&literals[l_idx])) {
+      // printf("Found that %d is positive reducing marked\n", l_idx);
+      reducing_cost_lits[num_reducing_cost_lits] = l_idx;
+      num_reducing_cost_lits++;
+      continue;
+    } else if (IS_RED_COST_ZERO(&literals[l_idx])) {
+     // printf("Found that %d is zero reducing marked\n", l_idx);
+      reducing_cost_lits[num_literals - num_zero_cost_lits - 1] = l_idx;
+      num_zero_cost_lits++;
+      continue;
     }
 
     const int occ = l->occurrences;
@@ -218,14 +233,17 @@ static void find_cost_reducing_literals() {
     if (diff == 0.0) {
       reducing_cost_lits[num_literals - num_zero_cost_lits - 1] = l_idx;
       num_zero_cost_lits++;
+      MARK_RED_COST_ZERO(&literals[l_idx]);
     } else if (diff >= 0.0) {
       reducing_cost_lits[num_reducing_cost_lits] = l_idx;
       num_reducing_cost_lits++;
+      MARK_RED_COST_POS(&literals[l_idx]);
       max_reducing_cost = MAX(max_reducing_cost, diff);
     }
   }
 
   // Loop over those marked
+  /*
   for (int i = 1; i <= num_vars; i++) {
     int l_idx = LIT_IDX(i);
     int not_l_idx = NEGATED_IDX(l_idx);
@@ -304,7 +322,7 @@ static void find_cost_reducing_literals() {
 
     sleep(5);
 
-    /*
+    
     printf("1st: [");
     for (int i = 0; i < num_literals; i++) {
       printf("%d ", reducing_cost_lits[i]);
@@ -314,10 +332,11 @@ static void find_cost_reducing_literals() {
       printf("%d ", reducing_cost_copy[i]);
     }
     printf("]\n");
-    */
+    
   }// else {
   //  printf("c Identical arrays\n");
   //}
+  */
 }
 
 /** @brief Transfers weight from one clause to another in the distribute step.
@@ -529,12 +548,14 @@ int main(int argc, char *argv[]) {
   log_str("c All done parsing CLI args, opening file %s\n", filename);
   parse_cnf_file(filename);
 
+  /*
   // TODO remove when verify copy is good TODO calloc to array compare
   reducing_cost_copy = calloc(num_literals, sizeof(int));
   if (reducing_cost_copy == NULL) {
     fprintf(stderr, "c Ran out of memory on copy, exiting\n");
     exit(-1);
   }
+  */
 
   run_algorithm();
 
