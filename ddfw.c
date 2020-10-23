@@ -295,7 +295,15 @@ static void find_cost_reducing_literals() {
   if (memcmp(reducing_cost_copy, reducing_cost_lits, 
         num_literals * sizeof(int)) != 0) {
     printf("c The two arrays were not equal on flip %d\n", flips);
-    sleep(1);
+    for (int i = 0; i < num_literals; i++) {
+      if (reducing_cost_lits[i] != reducing_cost_copy[i]) {
+        printf("%d != %d at %d\n",
+            reducing_cost_lits[i], reducing_cost_copy[i], i);
+      }
+    }
+
+    sleep(5);
+
     /*
     printf("1st: [");
     for (int i = 0; i < num_literals; i++) {
@@ -324,6 +332,21 @@ static void find_cost_reducing_literals() {
 static inline void transfer_weight(clause_t *from, clause_t *to) {
   from->weight /= 2.0;
   to->weight += from->weight;
+
+  // Clear markings of literals involved in the two clauses
+  const int from_size = from->size;
+  const int to_size = to->size;
+  for (int l = 0; l < from_size; l++) {
+    int l_idx = POS_LIT_IDX(from->literals[l]);
+    literal_t *lit = &literals[l_idx];
+    CLEAR_MARKING(lit);
+  }
+
+  for (int l = 0; l < to_size; l++) {
+    int l_idx = POS_LIT_IDX(to->literals[l]);
+    literal_t *lit = &literals[l_idx];
+    CLEAR_MARKING(lit);
+  }
 }
 
 /** @brief Distribute weights from satisfied to unsatisfied clauses.
@@ -341,11 +364,13 @@ static void distribute_weights() {
   printf("c Distributing weights\n");
 
   // TODO to be safe, clear all literal markings
+  /*
   for (int i = 1; i <= num_vars; i++) {
     int l_idx = LIT_IDX(i);
     literal_t *l = &literals[l_idx];
     CLEAR_MARKING(l);
   }
+  */
 
   // Loop over all clauses, picking out those that are false
   for (int c = 0; c < num_clauses; c++) {

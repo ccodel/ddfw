@@ -99,7 +99,7 @@ void initialize_formula(int num_cs, int num_vs) {
     exit(-1);
   }
 
-  // Zero out because array comparison, TODO to malloc later
+  // Zero out because array comparison
   reducing_cost_lits = calloc(num_literals, sizeof(int));
   if (reducing_cost_lits == NULL) {
     log_str("c Ran out of memory when allocating extras, exiting\n");
@@ -269,7 +269,7 @@ void flip_literal(int lit_idx) {
   const int var_idx = VAR_IDX(lit_idx);
   int assigned = ASSIGNMENT(lit_idx);
 
-  // TODO Clear markings in the positive literal
+  // TODO Clear markings in the positive literal - always remove?
   literal_t *l, *not_l;
   if (assigned) {
     l = &literals[pos_lit_idx];
@@ -293,12 +293,15 @@ void flip_literal(int lit_idx) {
     cl->sat_lits--;
     cl->sat_mask ^= lit_idx;
 
+    // If the clause becomes critical, 
     // Clear markings of literals involved in the clause
-    const int size = cl->size;
-    for (int cl_lit = 0; cl_lit < size; cl_lit++) {
-      int l_idx = POS_LIT_IDX(cl->literals[cl_lit]);
-      literal_t *clause_literal = &literals[l_idx];
-      CLEAR_MARKING(clause_literal);
+    if (cl->sat_lits <= 1) {
+      const int size = cl->size;
+      for (int cl_lit = 0; cl_lit < size; cl_lit++) {
+        int l_idx = POS_LIT_IDX(cl->literals[cl_lit]);
+        literal_t *clause_literal = &literals[l_idx];
+        CLEAR_MARKING(clause_literal);
+      }
     }
 
     if (cl->sat_lits == 0) {
@@ -316,11 +319,13 @@ void flip_literal(int lit_idx) {
     cl->sat_mask ^= lit_idx;
 
     // Clear markings of literals involved in the clause
-    const int size = cl->size;
-    for (int cl_lit = 0; cl_lit < size; cl_lit++) {
-      int l_idx = POS_LIT_IDX(cl->literals[cl_lit]);
-      literal_t *clause_literal = &literals[l_idx];
-      CLEAR_MARKING(clause_literal);
+    if (cl->sat_lits <= 2) {
+      const int size = cl->size;
+      for (int cl_lit = 0; cl_lit < size; cl_lit++) {
+        int l_idx = POS_LIT_IDX(cl->literals[cl_lit]);
+        literal_t *clause_literal = &literals[l_idx];
+        CLEAR_MARKING(clause_literal);
+      }
     }
 
     if (cl->sat_lits == 1) {
