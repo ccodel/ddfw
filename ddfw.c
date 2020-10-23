@@ -99,7 +99,7 @@
 /** Default number of seconds to loop before timing out. 
  *  Can be toggled with the -t <timeout_secs> flag at the command line.
  **/
-#define DEFAULT_TIMEOUT_SECS              (10)
+#define DEFAULT_TIMEOUT_SECS              (100)
 
 /** Default number of times a loop body is run before the number of elapsed
  *  seconds is checked. Not currently configurable.
@@ -107,7 +107,7 @@
  *  TODO maybe define this based on some computed runtime quantity? Make
  *       smaller based on number of clauses/literals?
  */
-#define DEFAULT_LOOPS_PER_TIMEOUT_CHECK   (500)
+#define DEFAULT_LOOPS_PER_TIMEOUT_CHECK   (1000)
 
 /** Default randomization seed. */
 #define DEFAULT_SEED                      (0xdeadd00d)
@@ -436,7 +436,7 @@ static void run_algorithm() {
 
   // Record the time to ensure no timeout
   int timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
-  int seconds_at_start = time(NULL) / 3600;
+  int seconds_at_start = time(NULL);
 
   int lit_to_flip;
   while (unsat_clauses > 0) {
@@ -458,7 +458,6 @@ static void run_algorithm() {
     }
 
     flip_literal(lit_to_flip);
-    // sleep(1);
 
     // Determine if enough loops have passed to update time variable
     timeout_loop_counter--;
@@ -466,7 +465,9 @@ static void run_algorithm() {
       printf("c There are now %d unsat clauses after %d flips\n",
           unsat_clauses, flips);
       timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
-      if ((time(NULL) / 3600) - seconds_at_start >= timeout_secs)
+
+      // Check for timeout
+      if (time(NULL) - seconds_at_start >= timeout_secs)
         break;
     }
   }
@@ -534,11 +535,12 @@ int main(int argc, char *argv[]) {
   printf("c                          Version 0.1\n");
   printf("c ------------------------------------------------------------\n");
 
-
   if (filename == NULL) {
     fprintf(stderr, "c No filename provided, exiting.\n");
     exit(1);
   }
+
+  log_str("c Running with timeout of %d seconds\n", timeout_secs);
 
   if (seed == DEFAULT_SEED) {
     log_str("c Using default randomization seed %d\n", seed);
