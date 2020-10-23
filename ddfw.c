@@ -3,18 +3,71 @@
  *         the paper: "Neighbourhood Clause Weight Redistribution in 
  *                     Local Search for SAT" [Ishtaiwi, Thornton, Sattar, Pham]
  *
- *  @usage ./ddfw [-hv] -f <filename> [-s <seed>] [-t <timeout>]
- *
- *  The algorithm is implemented as TODO...
- *
- *  This implementation of DDFW assumes that:
- *
+ *  Note that this implementation of DDFW assumes that:
  *   - No clause has more than MAX_CLAUSE_LENGTH literals in it
  *   - No clause contains a tautology (e.g. (x v !x))
- *
- *  @author Cayden Codel (ccodel@andrew.cmu.edu)
  *  
+ *  ///////////////////////////////////////////////////////////////////////////
+ *  // HIGH LEVEL OVERVIEW OF DDFW
+ *  ///////////////////////////////////////////////////////////////////////////
+ *  
+ *  TODO High level discussion here.
+ *
+ *  ///////////////////////////////////////////////////////////////////////////
+ *  // IMPLEMENTATION
+ *  ///////////////////////////////////////////////////////////////////////////
+ *  
+ *  TODO Implementation discussion here.
+ *
+ *  ///////////////////////////////////////////////////////////////////////////
+ *  // QUIRKY IMPLEMENTATION DETAILS
+ *  ///////////////////////////////////////////////////////////////////////////
+ *
+ *  According to DIMACS format, variables are specified by nonzero integers.
+ *  A positive integer corresponds to a positive literal l, whereas a negative
+ *  integer corrsponds to a negated literal, !l. Note that the problem line
+ *  defines the total number of *variables*, not the total number of literals.
+ *  Therefore, there are twice as many literals as there are variables.
+ *
+ *  In this implementation, each literal has a unique literal_t struct that
+ *  is allocated contiguously in the literals array. Literals are stored
+ *  adjacently to their negated form. So, if the literal is (l = 5), then
+ *  the index into the literals array to access the literal_t struct for
+ *  l is (2 * 5), and the index for !l is (2 * 5) + 1. Because DIMACS variables
+ *  are 1-indexed, the literals array has "two too many" to preserve the
+ *  1-indexing of DIMACS format.
+ *
+ *  The clauses are 0-indexed, however, as the clause_t array, clauses, is
+ *  built internally.
+ *
+ *  The motivation behind using a [l1, !l1, l2, !l2, ...] literals storage
+ *  structure, as opposed to all positive literals on one side of a pointer
+ *  and all negated literals on the other, is to take advantage of caching
+ *  when accessing l and !l together. For example, when flipping a literal
+ *  in the assignment, clauses for both l and !l must be updated, and so
+ *  both literal_t structs are accessed together. Whether or not such caching
+ *  effects can be felt during runtime is something the author has not
+ *  investigated, and stands as a potential optimization.
+ *
+ *  ///////////////////////////////////////////////////////////////////////////
+ *  // CREDITS AND ACKNOWLEDGEMENTS
+ *  ///////////////////////////////////////////////////////////////////////////
+ *
+ *  @author   Cayden Codel (ccodel@andrew.cmu.edu)
+ *  @advisor  Marijn Heule (mheule@andrew.cmu.edu)
+ *
+ *  Original DDFW paper authored by
+ *  @author   Abdelraouf Ishtaiwi (a.ishtaiwi@giffith.edu.au)
+ *  @author   John Thornton       (j.thornton@griffith.edu.au)
+ *  @author   Abdul Sattar        (a.sattar@griffith.edu.au)
+ *  @author Duc Nghia Pham        (d.n.pham@griffith.edu.au)
+ *  
+ *  ///////////////////////////////////////////////////////////////////////////
+ *  // BUGS AND TODOS
+ *  ///////////////////////////////////////////////////////////////////////////
+ *
  *  @bug No known bugs.
+ *  @todos Many todos.
  */
 
 #include <unistd.h>
@@ -25,27 +78,28 @@
 #include <getopt.h>
 #include <time.h>
 
-#define MAX_CLI_ARGS  9
+#include "ddfw_types.h"
+#include "clause.h"
+#include "cnf_parser.h"
+#include "logger.h"
 
-#define verbose_printf(...)  ((verbose) ? printf(__VA_ARGS__) : 0)
+///////////////////////////////////////////////////////////////////////////////
+// CONFIGURATION MACROS
+///////////////////////////////////////////////////////////////////////////////
 
-/** Some simple helper functions. */
-/** Calculates the absolute value of the number passed in. */
-#define ABS(x)     (((x) < 0) ? -x : x)
-
-/** Finds the minimum of two numbers. */
-#define MIN(x, y)  (((x) < (y)) ? (x) : (y))
-
-/** Finds the maximum of two numbers. */
-#define MAX(x, y)  (((x) > (y)) ? (x) : (y))
-
-/** Default starting weight for each clause. */
-#define DEFAULT_CLAUSE_WEIGHT                (1.0)
+/** @brief The maximum number of command line arguments allowed.
+ *
+ *  While this number alone will not catch ill-formed command line arguments,
+ *  if does provide a quick way to short-circuit in main().
+ *
+ *  UPDATE THIS NUMBER IF NEW COMMAND LINE ARGUMENTS ARE IMPLEMENTED.
+ */
+#define MAX_CLI_ARGS  10
 
 /** Default number of seconds to loop before timing out. 
  *  Can be toggled with the -t <timeout_secs> flag at the command line.
  **/
-#define DEFAULT_TIMEOUT_SECS                  (10)
+#define DEFAULT_TIMEOUT_SECS              (10)
 
 /** Default number of times a loop body is run before the number of elapsed
  *  seconds is checked. Not currently configurable.
@@ -55,374 +109,37 @@
  */
 #define DEFAULT_LOOPS_PER_TIMEOUT_CHECK   (100)
 
-#define COMMENT_LINE ('c')
-#define PROBLEM_LINE ('p')
+/** Default randomization seed. */
+#define DEFAULT_SEED                      (0xdeadd00d)
 
-/** Takes a literal and returns the index into the array *literals. */
-#define LIT_IDX(x)   (((x) < 0) ? (num_vars + -(x) - 1) : ((x) - 1))
+// TODO versioning
 
-/** Takes a converted LIT_IDX and returns if the index is a negated literal */
-#define IS_NEGATED(x)  (((x) >= num_vars) ? 1 : 0)
+///////////////////////////////////////////////////////////////////////////////
+// HELPER MACROS
+///////////////////////////////////////////////////////////////////////////////
 
-#define NEGATED_IDX(x) (((x) >= num_vars) ? ((x) - num_vars) : ((x) + num_vars))
+/** Calculates the absolute value of the number passed in. */
+#define ABS(x)     (((x) < 0) ? -(x) : (x))
 
-/** Takes a converted LIT_IDX and converts back to var_idx for *assignment. */
-#define VAR_IDX(x)   (((x) >= num_vars) ? ((x) - num_vars) : (x))
+/** Finds the minimum of two numbers. */
+#define MIN(x, y)  (((x) < (y)) ? (x) : (y))
 
-/** Used to define a buffer to store literals in during CNF I/O. */
-#define MAX_CLAUSE_LENGTH 10000 // TODO remove this limit later
+/** Finds the maximum of two numbers. */
+#define MAX(x, y)  (((x) > (y)) ? (x) : (y))
 
-typedef struct clause {
-  int size;      // Number of literals in the clause
-  int sat_lits;  // Counter on number of unsatisfied literals
-  int sat_mask;  // XOR of all literals that satisfy the clause
-  double weight; // Weight of the clause
-  int *literals; // Array of literal indexes, already converted through LIT_IDX
-} clause_t;
+///////////////////////////////////////////////////////////////////////////////
+// STATIC GLOBAL VARIABLE DECLARATIONS
+///////////////////////////////////////////////////////////////////////////////
 
-typedef struct literal {
-  int occurrences;
-  int *clause_indexes;  // Array of clause indexes into *clauses.
-} literal_t;
-
-/** Number of variables (x_i), literals (x_i, !x_i), clauses */
-static int num_lits, num_vars, num_clauses;
-
-static literal_t *literals; // Positive literals in front half
-static clause_t *clauses;
-static char *assignment;    // TODO change to bitvector later?
-static int unsat_clauses;   // Counter of unsatisfied clauses
-
-static int seed;            // Optional randomization seed
 static int timeout_secs = DEFAULT_TIMEOUT_SECS;  // Seconds until timeout
-
-static int clause_id_buf[MAX_CLAUSE_LENGTH]; // TODO move later?
-
-/** Information generated by algorithm */
-static int *greatest_reduction_cost_lits;
-static int num_reducing_lits;
-
-/** Other information to track */
-static int min_clause_size = INT_MAX, max_clause_size = 0;
-static int min_lit_occurrences = INT_MAX, max_lit_occurrences = 0;
-
-////////////////////////////////////////////////////////////////////////////////
-// Printing, debugging, and usage
-////////////////////////////////////////////////////////////////////////////////
-
-/** Whether verbose printing should be enabled. Disabled, by default. */
-static int verbose = 0;
-
-static void print_usage(char *path, FILE *f) {
-  fprintf(f, "Usage: %s [-vh] -f <filename> [-s <seed>] [-t <timeout>]\n", 
-      path);
-}
-
-static void print_help(char *path, FILE *f) {
-  fprintf(f, "%s: Divide and Distribute Fixed Weights\n", path);
-  fprintf(f, "  -f <filename>  Provide a .cnf file.\n");
-  fprintf(f, "  -h             Display this help message.\n");
-  fprintf(f, "  -s <seed>      Provide an optional randomization seed.\n");
-  fprintf(f, "  -t <timeout>   Provide an optional seconds until timeout.\n");
-  fprintf(f, "  -v             Turn on verbose printing.\n");
-}
-
-static void print_clause(clause_t *c, FILE *f) {
-  fprintf(f, "(");
-  int size = c->size;
-  int *lits = c->literals;
-  for (int i = 0; i < size; i++) {
-    int var_idx = VAR_IDX(ABS(lits[i]));
-    int negated = IS_NEGATED(lits[i]);
-
-    if ((assignment[var_idx] && !negated) ||
-        (!assignment[var_idx] && negated)) {
-      fprintf(f, "[%d]", lits[i]);
-    } else {
-      fprintf(f, "%d", lits[i]);
-    }
-
-    if (i != size - 1)
-      fprintf(f, " ");
-    else
-      fprintf(f, ") -> %d\n", c->sat_lits);
-  }
-}
-
-/** @brief Prints general information per loop(?)
- */
-static void print_loop_info() {
-  printf("c ----------------------------------------------------------\n");
-  printf("c Assignment:\nc       ");
-  for (int i = 0; i < num_vars; i++) {
-    if (assignment[i])
-      printf(" %d ", i + 1);
-    else
-      printf("%d ", -(i + 1));
-    if (((i + 1) & 0x7) == 0)
-      printf("\nc       ");
-  }
-  printf("\n");
-
-  double unsat_weight = 0.0;
-  for (int c = 0; c < num_clauses; c++) {
-    if (clauses[c].sat_lits == 0)
-      unsat_weight += clauses[c].weight;
-  }
-  printf("c  Unsat clauses: %d, unsat weight: %.2f\n", 
-      unsat_clauses, unsat_weight);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// File processing and memory allocation
-////////////////////////////////////////////////////////////////////////////////
-
-// TODO make every "important" variable static global because apparently
-//      setting up arguments onto the stack is very expensive
-
-// TODO global variables into a state struct? Examine later...
-
-/** @brief Allocates enough memory to store the information from the CNF file.
- *
- *  @note The results returned from malloc() are not checked for NULL.
- */
-static void alloc_memory() {
-  verbose_printf("Allocating memory\n");
-  literals = malloc(num_lits * sizeof(literal_t));
-  clauses = malloc(num_clauses * sizeof(clause_t));
-  assignment = malloc(num_vars * sizeof(char));
-  greatest_reduction_cost_lits = malloc(num_lits * sizeof(int));
-}
-
-// TODO name
-// Do some meta processing on information gathered from .cnf file
-static void meta_process_file() {
-  for (int i = 0; i < num_lits; i++) {
-    min_lit_occurrences = MIN(min_lit_occurrences, literals[i].occurrences);
-    max_lit_occurrences = MAX(max_lit_occurrences, literals[i].occurrences);
-  }
-
-  // Loop through each literal and find the clauses they are in
-  // TODO this is horrible efficiency, think of dynamic data structure for later
-  for (int i = 0; i < num_lits; i++) {
-    literal_t *l = &literals[i];
-    l->clause_indexes = malloc(l->occurrences * sizeof(int));
-    int clause_idx = 0;
-    if (l->clause_indexes == NULL) {
-      fprintf(stderr, "c Error: Out of memory\n");
-      exit(-1);
-    }
-
-    // Loop through all clauses and see if the literal is in it
-    for (int c = 0; c < num_clauses; c++) {
-      clause_t *clause = &clauses[c];
-      int size = clause->size;
-      int *lit_idx = clause->literals;
-      for (int s = 0; s < size; s++) {
-        if (*lit_idx == i) {
-          l->clause_indexes[clause_idx++] = c;
-        }
-        lit_idx++;
-      }
-    }
-  }
-}
-
-/** @brief Parses the CNF file with the provided file name.
- *
- *  
- *  @param filename The name of the CNF file to open.
- *  @return void, but will call exit(-1) if an error is encountered.
- *
- */
-static void parse_cnf_file(char *filename) {
-  FILE *f = fopen(filename, "r");
-  if (f == NULL) {
-    fprintf(stderr, "c Error: Not able to open the file: %s\n", filename);
-    exit(-1);
-  } else {
-    verbose_printf("Successfully opened file %s\n", filename);
-  }
-
-  // Keep scanning the file until the header line is found
-  int problem_found = 0;
-  while (!problem_found) {
-    char c = fgetc(f);
-    switch (c) {
-      case COMMENT_LINE:
-        verbose_printf("Found comment line, skipping\n");
-        fscanf(f, "%*[^\n]");
-        continue;
-      case PROBLEM_LINE:
-        verbose_printf("Found problem line\n");
-        fscanf(f, "%*s %d %d\n", &num_vars, &num_clauses);
-        num_lits = num_vars * 2;
-        alloc_memory(); // TODO name?
-        problem_found = 1;
-        break;
-    }
-  }
-  
-  // Now scan in all the clauses
-  verbose_printf("Scanning clauses\n");
-  int scanned_clauses = 0;
-  while (scanned_clauses < num_clauses) {
-    int lit = 0, clause_size = 0;
-    do {
-      fscanf(f, "%d", &lit);
-      if (lit != 0) {
-        // New literal for the clause - count occurrence, place into buffer
-        int idx = LIT_IDX(lit);
-        literals[idx].occurrences++;
-        clause_id_buf[clause_size] = idx;
-        clause_size++;
-      } else {
-        // Finished with this clause, since encountered a 0
-        // Instantiate new clause with default weight and copy over literal idxs
-        clause_t *clause = &clauses[scanned_clauses++];
-        clause->size = clause_size;
-        clause->weight = DEFAULT_CLAUSE_WEIGHT;
-        clause->literals = malloc(clause_size * sizeof(int));
-        memcpy(clause->literals, clause_id_buf, clause_size * sizeof(int));
-
-        // Update some meta-information
-        min_clause_size = MIN(min_clause_size, clause_size);
-        max_clause_size = MAX(max_clause_size, clause_size);
-      }
-    } while (lit != 0);
-  }
-
-  verbose_printf("Done with I/O, processing CNF file\n");
-  meta_process_file();
-  verbose_printf("Done meta processing, onto the algorithm!\n");
-  fclose(f);
-}
 
 ////////////////////////////////////////////////////////////////////////////////
 // DDFW algorithm implementation
 ////////////////////////////////////////////////////////////////////////////////
 
-/** @brief Takes the in index of the literal to flip and flips it.
- *
- *  The flip makes a change in the assignment array.
- *
- *  @param lit_idx The index of the literal to flip.
- */
-static void flip_literal(int lit_idx) {
-  verbose_printf("c Flipping %d\n", lit_idx);
-
-  int var_idx = VAR_IDX(lit_idx);
-  int not_idx = NEGATED_IDX(lit_idx);
-  literal_t *l = &literals[lit_idx];
-  literal_t *not_l = &literals[not_idx];
-
-  int occ = l->occurrences;
-  int not_occ = not_l->occurrences;
-
-  // For each clause l is in, set to false
-  for (int c = 0; c < occ; c++) {
-    int c_idx = l->clause_indexes[c];
-    clause_t *cl = &clauses[c_idx];
-
-    // Remove literal from sat XOR mask
-    cl->sat_lits--;
-    cl->sat_mask ^= lit_idx;
-
-    if (cl->sat_lits == 0) {
-      unsat_clauses++;
-      verbose_printf("c Unsatisfied clause %d\n", c_idx);
-    }
-  }
-
-  // For each clause !l is in, set to true
-  for (int c = 0; c < not_occ; c++) {
-    int c_idx = not_l->clause_indexes[c];
-    clause_t *cl = &clauses[c_idx];
-
-    // Add literal to sat XOR mask
-    cl->sat_lits++;
-    cl->sat_mask ^= not_idx;
-
-    if (cl->sat_lits == 1) {
-      unsat_clauses--;
-      verbose_printf("c Satisfied clause %d\n", c_idx);
-    }
-  }
-
-  // Affect assignment array
-  assignment[var_idx] = !assignment[var_idx];
-}
-
-/** @brief Initializes structures to run the DDFW algorithm.
- *
- *  A few things need to be initialized in order to run DDFW.
- *
- *  1. A random assignment is chosen for the num_vars variables.
- *     The random assignment is generated by looping over each
- *     "slot" in the assignment variable and assigning it a random
- *     bit. A 1 in slot i indicates that x_i is assigned to true.
- *
- *  2. The clauses are looped over to determine satisfiability.
- *     After a random assignment is generated, many clauses may evaluate
- *     to true. Looping over the clauses determines how many literals in
- *     each clause are true, and overall how many clauses are true.
- *     Note the usage of an XOR satisfiability mask in each clause to help
- *     determine which literal is the last one keeping a clause true in
- *     the case that clause->sat_lits is 1.
- */
-static void initialize_algorithm() {
-  // Provide randomization seed, if one was provided
-  if (seed != 0) {
-    verbose_printf("Accepted seed %d\n", seed);
-    srand(seed);
-  }
-
-  // Randomize initial assignment
-  for (int i = 0; i < num_vars; i++) {
-    assignment[i] = (rand() & 0x1);
-    if (assignment[i])
-      verbose_printf("[%d] ", i + 1);
-    else
-      verbose_printf("%d ", i + 1);
-  }
-  verbose_printf("\n");
-
-  // Iterate through clauses to find which are satisfied
-  for (int i = 0; i < num_clauses; i++) {
-    clause_t *c = &clauses[i];
-    c->sat_lits = 0;
-    c->sat_mask = 0;
-
-    // Go through each literal to see which are satisfied
-    int *lits = c->literals;
-    int size = c->size;
-    for (int l = 0; l < size; l++) {
-      int var_idx = VAR_IDX(lits[l]);
-      int negated = IS_NEGATED(lits[l]);
-
-      // If the literal evalutes to true, update clause information
-      if ((assignment[var_idx] && !negated) ||
-          (!assignment[var_idx] && negated)) {
-        c->sat_lits++;
-        c->sat_mask ^= lits[l];
-      }
-    }
-
-    if (c->sat_lits == 0)
-      unsat_clauses++;
-
-    /*
-    if (verbose)
-      print_clause(c, stdout);
-      */
-  }
-
-  verbose_printf("There are %d unsatisfied clauses\n", unsat_clauses);
-}
-
 /** @brief Finds those literals that cause a positive change in weighted
- *         cost if flipped and stores them in greatest_reduction_cost_lits.
- *         Stores the number of such literals in num_reducing_lits.
+ *         cost if flipped and stores them in reducing_cost_lits.
+ *         Stores the number of such literals in num_reducing_cost_lits.
  *
  *  According to the DDFW algorithm, the first thing done per each loop body
  *  is to "find and return a list L of literals causing the greatest reduction
@@ -439,23 +156,27 @@ static void initialize_algorithm() {
  */
 static void find_cost_reducing_literals() {
   // Set the index to 0 to fill in "positive" literals as we go along
-  num_reducing_lits = 0;
+  num_reducing_cost_lits = 0;
+  num_zero_cost_lits = 0;
+  max_reducing_cost = 0.0;
 
   for (int i = 0; i < num_vars; i++) {
+    int l_idx = LIT_IDX(i);
+    int not_l_idx = NEGATED_IDX(l_idx);
     double satisfied_weight = 0.0;   // Weight "lost" when sat clauses on flip
     double unsatisfied_weight = 0.0; // Weight "gained" on unsat clauses
-    int assigned = assignment[i];
+    int assigned = ASSIGNMENT(l_idx); // TODO repeated computation-ish
     literal_t *l, *not_l;
     if (assigned) {
-      l = &literals[i];
-      not_l = &literals[i + num_vars];
+      l = &literals[l_idx];
+      not_l = &literals[not_l_idx];
     } else {
-      l = &literals[i + num_vars];
-      not_l = &literals[i];
+      l = &literals[not_l_idx];
+      not_l = &literals[l_idx];
     }
 
-    int occ = l->occurrences;
-    int not_occ = not_l->occurrences;
+    const int occ = l->occurrences;
+    const int not_occ = not_l->occurrences;
 
     // Loop over satisfied claueses containing the "true" literal
     for (int c = 0; c < occ; c++) {
@@ -477,11 +198,14 @@ static void find_cost_reducing_literals() {
 
     // Determine if flipping the truth value of the "true" literal
     // will result in more satisfied weight than unsatisfied weight
-    if (satisfied_weight - unsatisfied_weight >= 0.0) {
-      if (assigned)
-        greatest_reduction_cost_lits[num_reducing_lits++] = i;
-      else
-        greatest_reduction_cost_lits[num_reducing_lits++] = i + num_vars;
+    double diff = satisfied_weight - unsatisfied_weight;
+    if (diff == 0.0) {
+      reducing_cost_lits[num_literals - num_zero_cost_lits - 1] = l_idx;
+      num_zero_cost_lits++;
+    } else if (diff >= 0.0) {
+      reducing_cost_lits[num_reducing_cost_lits] = l_idx;
+      num_reducing_cost_lits++;
+      max_reducing_cost = MAX(max_reducing_cost, diff);
     }
   }
 }
@@ -511,7 +235,7 @@ static inline void transfer_weight(clause_t *from, clause_t *to) {
  *
  */
 static void distribute_weights() {
-  verbose_printf("c Distributing weights\n");
+  log_str("c Distributing weights\n");
 
   // Loop over all clauses, picking out those that are false
   for (int c = 0; c < num_clauses; c++) {
@@ -527,7 +251,7 @@ static void distribute_weights() {
     for (int l = 0; l < size; l++) {
       int l_idx = cl->literals[l];
       literal_t *l = &literals[l_idx];
-      int occ = l->occurrences;
+      const int occ = l->occurrences;
 
       // For each literal, search its neighbors for a satisfied clause
       for (int cn = 0; cn < occ; cn++) {
@@ -549,34 +273,38 @@ static void distribute_weights() {
   }
 }
 
+/** @brief Runs the DDFW algorithm.
+ *
+ *  Main loop.
+ */
 static void run_algorithm() {
-  initialize_algorithm();
+  generate_random_assignment();
 
   // Record the time to ensure no timeout
   int timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
   int seconds_at_start = time(NULL) / 3600;
+
   int lit_to_flip;
   while (unsat_clauses > 0) {
     find_cost_reducing_literals();
-
-    verbose_printf("c Found %d cost reducing literals\n", num_reducing_lits);
+    log_reducing_cost_lits();
     
     // See if any literals will reduce the weight
     // TODO no check against delta(W) = 0
-    if (num_reducing_lits > 0) {
-      int rand_lit = rand() % num_reducing_lits;
-      lit_to_flip = greatest_reduction_cost_lits[rand_lit];
-    } else {
+    if (num_reducing_cost_lits > 0) {
+      int rand_lit = rand() % num_reducing_cost_lits;
+      lit_to_flip = reducing_cost_lits[rand_lit];
+    }// else if (num_zero_cost_lits > 0) {
+      // TODO
+      //printf(stderr, "No weights\n");
+    //} 
+    else {
       distribute_weights();
       continue;
     }
 
-flip:
     flip_literal(lit_to_flip);
-    sleep(1);
-
-    if (verbose)
-      print_loop_info();
+    // sleep(1);
 
     // Determine if enough loops have passed to update time variable
     timeout_loop_counter--;
@@ -585,6 +313,14 @@ flip:
       if ((time(NULL) / 3600) - seconds_at_start >= timeout_secs)
         break;
     }
+  }
+
+  // Print solution
+  if (unsat_clauses == 0) {
+    output_assignment();
+  } else {
+    printf("s UNSATISFIABLE\n");
+    printf("c Could not solve due to timeout.\n");
   }
 }
 
@@ -599,43 +335,63 @@ flip:
  */
 int main(int argc, char *argv[]) {
   if (argc == 1 || argc > MAX_CLI_ARGS) {
-    print_usage(argv[0], stderr);
+    print_usage(argv[0]);
     exit(1);
   }
 
+  int seed = DEFAULT_SEED;
   char *filename = NULL;
   extern char *optarg;
   char opt;
-  while ((opt = getopt(argc, argv, "hvf:s:t:")) != -1) {
+  while ((opt = getopt(argc, argv, "hvqf:s:t:")) != -1) {
     switch (opt) { 
-      case 'h':
-        print_help(argv[0], stderr);
-        break;
-      case 'v':
-        verbose = 1;
-        break;
       case 'f':
         filename = optarg;
         break;
+      case 'h':
+        print_help(argv[0]);
+        return 0;
+      case 'q':
+        set_verbosity(SILENT);
+        break;
       case 's':
         seed = atoi(optarg);
+        if (seed != 0) {
+          log_str("c Using randomization seed %d", seed);
+          srand(seed);
+        }
         break;
       case 't':
         timeout_secs = atoi(optarg);
         break;
+      case 'v':
+        set_verbosity(VERBOSE);
+        break;
       default:
-        print_usage(argv[0], stdout);
+        print_usage(argv[0]);
     }
   }
 
-  verbose_printf("All done parsing CLI args, opening file...\n");
+  printf("c ------------------------------------------------------------\n");
+  printf("c          DDFW - Divide and Distribute Fixed Weights\n");
+  printf("c                  Implemented by Cayden Codel\n");
+  printf("c                          Version 0.1\n");
+  printf("c ------------------------------------------------------------\n");
+
 
   if (filename == NULL) {
-    fprintf(stderr, "No filename provided, exiting.\n");
+    fprintf(stderr, "c No filename provided, exiting.\n");
     exit(1);
   }
 
+  if (seed == DEFAULT_SEED) {
+    log_str("c Using default randomization seed %d\n", seed);
+    srand(seed);
+  }
+
+  log_str("c All done parsing CLI args, opening file %s\n", filename);
   parse_cnf_file(filename);
+
   run_algorithm();
 
   return 0;
