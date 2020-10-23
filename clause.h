@@ -130,6 +130,21 @@
 /** Global variables for the single formula DDFW is solving. */
 // TODO does packaging into a struct so there is one extern too slow?
 
+
+/** @brief Marks a literal as a positive cost reducing literal.
+ *
+ *  @param l A pointer to a literal to mark.
+ */
+#define MARK_RED_COST_POS(l)   ((l)->marking |= 0x1)
+
+#define IS_RED_COST_POS(l)     ((l)->marking & 0x1)
+
+#define MARK_RED_COST_ZERO(l)  ((l)->marking |= 0x2)
+
+#define IS_RED_COST_ZERO(l)    ((l)->marking & 0x2)
+
+#define CLEAR_MARKING(l)       ((l)->marking = 0)
+
 /** 
  *
  *  In order to facilitate fast DDFW solving, a CNF formula includes not just

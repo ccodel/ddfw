@@ -107,10 +107,12 @@
  *  TODO maybe define this based on some computed runtime quantity? Make
  *       smaller based on number of clauses/literals?
  */
-#define DEFAULT_LOOPS_PER_TIMEOUT_CHECK   (100)
+#define DEFAULT_LOOPS_PER_TIMEOUT_CHECK   (500)
 
 /** Default randomization seed. */
 #define DEFAULT_SEED                      (0xdeadd00d)
+
+#define DIFF_EPSILON  (0.01)
 
 // TODO versioning
 
@@ -119,19 +121,29 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 /** Calculates the absolute value of the number passed in. */
+#ifndef ABS
 #define ABS(x)     (((x) < 0) ? -(x) : (x))
+#endif
 
 /** Finds the minimum of two numbers. */
+#ifndef MIN
 #define MIN(x, y)  (((x) < (y)) ? (x) : (y))
+#endif
 
 /** Finds the maximum of two numbers. */
+#ifndef MAX
 #define MAX(x, y)  (((x) > (y)) ? (x) : (y))
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 // STATIC GLOBAL VARIABLE DECLARATIONS
 ///////////////////////////////////////////////////////////////////////////////
 
 static int timeout_secs = DEFAULT_TIMEOUT_SECS;  // Seconds until timeout
+
+static int reducing_cost_num = 0;
+static int reducing_cost_zero = 0;
+static int *reducing_cost_copy = NULL;
 
 ////////////////////////////////////////////////////////////////////////////////
 // DDFW algorithm implementation
@@ -160,7 +172,11 @@ static void find_cost_reducing_literals() {
   num_zero_cost_lits = 0;
   max_reducing_cost = 0.0;
 
-  for (int i = 0; i < num_vars; i++) {
+  // TODO remove
+  reducing_cost_num = 0;
+  reducing_cost_zero = 0;
+
+  for (int i = 1; i <= num_vars; i++) {
     int l_idx = LIT_IDX(i);
     int not_l_idx = NEGATED_IDX(l_idx);
     double satisfied_weight = 0.0;   // Weight "lost" when sat clauses on flip
@@ -208,6 +224,92 @@ static void find_cost_reducing_literals() {
       max_reducing_cost = MAX(max_reducing_cost, diff);
     }
   }
+
+  // Loop over those marked
+  for (int i = 1; i <= num_vars; i++) {
+    int l_idx = LIT_IDX(i);
+    int not_l_idx = NEGATED_IDX(l_idx);
+    double satisfied_weight = 0.0;   // Weight "lost" when sat clauses on flip
+    double unsatisfied_weight = 0.0; // Weight "gained" on unsat clauses
+    int assigned = ASSIGNMENT(l_idx); // TODO repeated computation-ish
+    literal_t *l, *not_l;
+    if (assigned) {
+      l = &literals[l_idx];
+      not_l = &literals[not_l_idx];
+    } else {
+      l = &literals[not_l_idx];
+      not_l = &literals[l_idx];
+    }
+
+    // Check if the literal has been marked already
+    if (IS_RED_COST_POS(&literals[l_idx])) {
+      // printf("Found that %d is positive reducing marked\n", l_idx);
+      reducing_cost_copy[reducing_cost_num] = l_idx;
+      reducing_cost_num++;
+      continue;
+    } else if (IS_RED_COST_ZERO(&literals[l_idx])) {
+     // printf("Found that %d is zero reducing marked\n", l_idx);
+      reducing_cost_copy[num_literals - reducing_cost_zero - 1] = l_idx;
+      reducing_cost_zero++;
+      continue;
+    }
+
+    // Otherwise, has not been marked yet
+    const int occ = l->occurrences;
+    const int not_occ = not_l->occurrences;
+
+    // Loop over satisfied claueses containing the "true" literal
+    for (int c = 0; c < occ; c++) {
+      int c_idx = l->clause_indexes[c];
+      clause_t *cl = &clauses[c_idx];
+      if (cl->sat_lits == 1) {
+        unsatisfied_weight += cl->weight;
+      }
+    }
+
+    // Loop over unsatisfied clauses containing the "false" literal
+    for (int c = 0; c < not_occ; c++) {
+      int c_idx = not_l->clause_indexes[c];
+      clause_t *cl = &clauses[c_idx];
+      if (cl->sat_lits == 0) {
+        satisfied_weight = cl->weight;
+      }
+    }
+
+    // Determine if flipping the truth value of the "true" literal
+    // will result in more satisfied weight than unsatisfied weight
+    double diff = satisfied_weight - unsatisfied_weight;
+    if (diff == 0.0) {
+      reducing_cost_copy[num_literals - reducing_cost_zero - 1] = l_idx;
+      reducing_cost_zero++;
+      MARK_RED_COST_ZERO(&literals[l_idx]);
+    } else if (diff >= 0.0) {
+      reducing_cost_copy[reducing_cost_num] = l_idx;
+      reducing_cost_num++;
+      MARK_RED_COST_POS(&literals[l_idx]);
+      max_reducing_cost = MAX(max_reducing_cost, diff);
+    }
+  }
+
+  // Check if the two arrays are equal
+  if (memcmp(reducing_cost_copy, reducing_cost_lits, 
+        num_literals * sizeof(int)) != 0) {
+    printf("c The two arrays were not equal on flip %d\n", flips);
+    sleep(1);
+    /*
+    printf("1st: [");
+    for (int i = 0; i < num_literals; i++) {
+      printf("%d ", reducing_cost_lits[i]);
+    }
+    printf("]\n2nd: [");
+    for (int i = 0; i < num_literals; i++) {
+      printf("%d ", reducing_cost_copy[i]);
+    }
+    printf("]\n");
+    */
+  }// else {
+  //  printf("c Identical arrays\n");
+  //}
 }
 
 /** @brief Transfers weight from one clause to another in the distribute step.
@@ -235,7 +337,15 @@ static inline void transfer_weight(clause_t *from, clause_t *to) {
  *
  */
 static void distribute_weights() {
-  log_str("c Distributing weights\n");
+  // log_str("c Distributing weights\n");
+  printf("c Distributing weights\n");
+
+  // TODO to be safe, clear all literal markings
+  for (int i = 1; i <= num_vars; i++) {
+    int l_idx = LIT_IDX(i);
+    literal_t *l = &literals[l_idx];
+    CLEAR_MARKING(l);
+  }
 
   // Loop over all clauses, picking out those that are false
   for (int c = 0; c < num_clauses; c++) {
@@ -309,6 +419,8 @@ static void run_algorithm() {
     // Determine if enough loops have passed to update time variable
     timeout_loop_counter--;
     if (timeout_loop_counter == 0) {
+      printf("c There are now %d unsat clauses after %d flips\n",
+          unsat_clauses, flips);
       timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
       if ((time(NULL) / 3600) - seconds_at_start >= timeout_secs)
         break;
@@ -391,6 +503,13 @@ int main(int argc, char *argv[]) {
 
   log_str("c All done parsing CLI args, opening file %s\n", filename);
   parse_cnf_file(filename);
+
+  // TODO remove when verify copy is good TODO calloc to array compare
+  reducing_cost_copy = calloc(num_literals, sizeof(int));
+  if (reducing_cost_copy == NULL) {
+    fprintf(stderr, "c Ran out of memory on copy, exiting\n");
+    exit(-1);
+  }
 
   run_algorithm();
 

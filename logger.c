@@ -250,6 +250,23 @@ void log_reducing_cost_lits() {
       }
     }
   }
+
+  for (int i = 0; i < num_zero_cost_lits; i++) {
+    int l_idx = POS_LIT_IDX(reducing_cost_lits[num_literals - i - 1]);
+    int not_l_idx = NEGATED_IDX(l_idx);
+    int assigned = ASSIGNMENT(l_idx);
+    literal_t *l, *not_l;
+    if (assigned) {
+      l = &literals[l_idx];
+      not_l = &literals[not_l_idx];
+    } else {
+      l = &literals[not_l_idx];
+      not_l = &literals[l_idx];
+    }
+
+    printf("c %d (var %d) is zero reducing, current truth value %d\n",
+        l_idx, VAR_IDX(l_idx), assigned);
+  }
 }
 
 /** @brief Logs the current assignment in the global formula variable.

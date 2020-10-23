@@ -3,6 +3,10 @@
 *.swo
 *.DS_Store
 
+# DDFW specific files
+cnf/
+ddfw
+
 # Prerequisites
 *.d
 

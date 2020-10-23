@@ -99,7 +99,8 @@ void initialize_formula(int num_cs, int num_vs) {
     exit(-1);
   }
 
-  reducing_cost_lits = malloc(num_literals * sizeof(int));
+  // Zero out because array comparison, TODO to malloc later
+  reducing_cost_lits = calloc(num_literals, sizeof(int));
   if (reducing_cost_lits == NULL) {
     log_str("c Ran out of memory when allocating extras, exiting\n");
     exit(-1);
@@ -171,7 +172,7 @@ void process_clauses() {
   }
 
   // Set all lit->marking variables to 0
-  for (int l = 0; l < nl; l++) {
+  for (int l = 0; l <= nl; l++) {
     literal_t *lit = &literals[l];
     lit->marking = 0;
   }
@@ -268,13 +269,16 @@ void flip_literal(int lit_idx) {
   const int var_idx = VAR_IDX(lit_idx);
   int assigned = ASSIGNMENT(lit_idx);
 
+  // TODO Clear markings in the positive literal
   literal_t *l, *not_l;
   if (assigned) {
     l = &literals[pos_lit_idx];
+    CLEAR_MARKING(l);
     not_l = &literals[not_lit_idx];
   } else {
     l = &literals[not_lit_idx];
     not_l = &literals[pos_lit_idx];
+    CLEAR_MARKING(not_l);
   }
 
   int occ = l->occurrences;
@@ -289,6 +293,14 @@ void flip_literal(int lit_idx) {
     cl->sat_lits--;
     cl->sat_mask ^= lit_idx;
 
+    // Clear markings of literals involved in the clause
+    const int size = cl->size;
+    for (int cl_lit = 0; cl_lit < size; cl_lit++) {
+      int l_idx = POS_LIT_IDX(cl->literals[cl_lit]);
+      literal_t *clause_literal = &literals[l_idx];
+      CLEAR_MARKING(clause_literal);
+    }
+
     if (cl->sat_lits == 0) {
       unsat_clauses++;
     }
@@ -302,6 +314,14 @@ void flip_literal(int lit_idx) {
     // Add literal to sat XOR mask
     cl->sat_lits++;
     cl->sat_mask ^= lit_idx;
+
+    // Clear markings of literals involved in the clause
+    const int size = cl->size;
+    for (int cl_lit = 0; cl_lit < size; cl_lit++) {
+      int l_idx = POS_LIT_IDX(cl->literals[cl_lit]);
+      literal_t *clause_literal = &literals[l_idx];
+      CLEAR_MARKING(clause_literal);
+    }
 
     if (cl->sat_lits == 1) {
       unsat_clauses--;
@@ -318,4 +338,6 @@ void flip_literal(int lit_idx) {
   if (get_verbosity() == VERBOSE) {
     log_assignment();
   }
+
+  flips++;
 }
