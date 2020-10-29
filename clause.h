@@ -21,8 +21,10 @@
 
 /** @brief Default starting weight for each clause.
  *  TODO make it so this can be toggled with a command line argument.
+ *
+ *  Value of 8 was chosen in original DDFW paper
  */
-#define DEFAULT_CLAUSE_WEIGHT (100.0)
+#define DEFAULT_CLAUSE_WEIGHT (8.0)
 
 /** @brief Takes a variable symbol from the DIMACS CNF input file and outputs
  *         an index into the literals array.
@@ -122,8 +124,6 @@
  *  @return 1 if the variable is set to true, and 0 otherwise.
  */
 #define ASSIGNMENT(x)      (assignment[(x) / 2])
-// #define ASSIGNMENT(x)  (((assignment[(x) / (2 * BITS_IN_BYTE)]) \
-//    >> (((x) / 2) & BYTE_MASK)) & 0x1)
 
 /** Global variables for the single formula DDFW is solving. */
 // TODO does packaging into a struct so there is one extern too slow?
@@ -142,7 +142,6 @@ extern int num_clauses;
 // Statistics
 extern int num_restarts;
 extern int num_flips;
-extern double unsat_weight;
 
 // Formula information - 1-indexed (VAR_IDX indexed)
 extern char *assignment;
@@ -164,18 +163,19 @@ extern int *false_clause_members;
 extern int *false_clause_indexes;
 extern int num_unsat_clauses;
 
-// Membership struct for cost reducing literals
-extern int *cost_reducing_lits; // Make into vars?
+// Membership struct for cost reducing variables
+extern int *cost_reducing_vars;
 extern int *cost_reducing_idxs;
-extern int num_cost_reducing_lits;
-void add_cost_reducing_lit(int l_idx); // Helper
+extern int num_cost_reducing_vars;
+void add_cost_reducing_var(const int v_idx); // Helper
+void remove_cost_reducing_var(const int v_idx); // Helper
 
 // Membership struct for variables to compute cost reduction
 extern int *cost_compute_vars;
 extern int *cost_compute_idxs;
 extern int num_cost_compute_vars;
-void add_cost_compute_var(int v_idx);
-void remove_cost_compute_var(int v_idx); // Helper
+void add_cost_compute_var(const int v_idx);
+void remove_cost_compute_var(const int v_idx); // Helper
 
 // Functions
 void initialize_formula(int num_cs, int num_vs);
@@ -183,6 +183,6 @@ void initialize_clause(int clause_idx, int size, int *lit_idxs);
 void process_clauses();
 
 void generate_random_assignment();
-void flip_literal(int lit_idx);
+void flip_variable(const int var_idx);
 
 #endif /* _CLAUSE_H_ */

@@ -1,6 +1,9 @@
 /** @file ddfw_types.h
  *  @brief Common types used by the DDFW algorithm.
  *
+ *  NOTE: These are "spiritual" types, in the sense that
+ *  accessing everything as a struct is more inefficient.
+ *
  *  @author Cayden Codel (ccodel@andrew.cmu.edu)
  *  
  *  @bug No known bugs.

@@ -106,12 +106,30 @@
  *  TODO maybe define this based on some computed runtime quantity? Make
  *       smaller based on number of clauses/literals?
  */
-#define DEFAULT_LOOPS_PER_TIMEOUT_CHECK   (1000)
+#define DEFAULT_LOOPS_PER_TIMEOUT_CHECK   (100000)
 
 /** Default randomization seed. */
 #define DEFAULT_SEED                      (0xdeadd00d)
 
-#define DIFF_EPSILON  (0.01)
+/** The transfer weight equation is
+ *
+ *  clause_to weight += a (clause_from weight) + c
+ *
+ *  where a is a multiplicative scalar and c a constant.
+ *
+ *  As the initial weight in the DDFW paper was 8, then we set
+ *
+ *  a = 0.75, c = 0.25
+ */
+#define A   (0.75)
+#define C   (0.25)
+
+/** @brief The default probability that the maximum weight neighboring clause
+ *         is disregarded for a random clause.
+ *
+ *  TODO configurable?
+ */
+#define DEFAULT_RANDOM_CLAUSE_PROB          (0.01)
 
 // TODO versioning
 
@@ -140,11 +158,7 @@
 
 static int timeout_secs = DEFAULT_TIMEOUT_SECS;  // Seconds until timeout
 
-/**
-static int reducing_cost_num = 0;
-static int reducing_cost_zero = 0;
-static int *reducing_cost_copy = NULL;
-**/
+static int random_clause_prob = (int) (1.0 / DEFAULT_RANDOM_CLAUSE_PROB);
 
 ////////////////////////////////////////////////////////////////////////////////
 // DDFW algorithm implementation
@@ -178,6 +192,8 @@ static void find_cost_reducing_literals() {
     const int assigned = ASSIGNMENT(l_idx);
     double satisfied_weight = 0.0;
     double unsatisfied_weight = 0.0;
+
+    // log_str("Checking var %d, truth value %d;", v_idx, assigned);
 
     // Determine the index of the true literal
     int true_idx, false_idx;
@@ -217,9 +233,11 @@ static void find_cost_reducing_literals() {
     // Determine if flipping the truth value of the true literal
     //   would result in more satisfied weight than unsatisfied weight
     const double diff = satisfied_weight - unsatisfied_weight;
-    if (diff >= 0.0) {
-      // Add to cost reducing lits
-      add_cost_reducing_lit(true_idx); // Filter out 0 cost variables?
+    // log_str(" diff %.4f\n", diff);
+    if (diff > 0.0) {
+      add_cost_reducing_var(v_idx); // Filter out 0 cost variables?
+    } else if (diff <= 0.0) {
+      remove_cost_reducing_var(v_idx);
     }
 
     // Remove var from compute list
@@ -241,22 +259,28 @@ static void find_cost_reducing_literals() {
  *  @param to_idx   The clause index that weight is given to.
  */
 static inline void transfer_weight(int from_idx, int to_idx) {
-  clause_weights[from_idx] /= 2.0;
-  clause_weights[to_idx] += clause_weights[from_idx];
+  double orig = clause_weights[from_idx];
+  clause_weights[from_idx] *= A;
+  clause_weights[from_idx] += C;
+  double diff = orig - clause_weights[from_idx];
+  clause_weights[to_idx] += diff;
 
-  // Signal compute cost of literals in the two clauses
   const int from_size = clause_sizes[from_idx];
   const int to_size = clause_sizes[to_idx];
-  int *from_lits = clause_literals[from_idx];
-  int *to_lits = clause_literals[to_idx];
 
-  // TODO must all variables be made critical?
-  for (int l = 0; l < from_size; l++) {
-    const int l_idx = *from_lits;
-    add_cost_compute_var(VAR_IDX(l_idx));
-    from_lits++;
+  // In the satisfied "from" clause, add vars to cost compute
+  //   only if the clause is "critical"
+  if (clause_num_true_lits[from_idx] <= 1) {
+    int *from_lits = clause_literals[from_idx];
+    for (int l = 0; l < from_size; l++) {
+      const int l_idx = *from_lits;
+      add_cost_compute_var(VAR_IDX(l_idx));
+      from_lits++;
+    }
   }
 
+  // In the unsatisfied "to" clause, add vars to cost compute
+  int *to_lits = clause_literals[to_idx];
   for (int l = 0; l < to_size; l++) {
     const int l_idx = *to_lits;
     add_cost_compute_var(VAR_IDX(l_idx));
@@ -275,8 +299,7 @@ static inline void transfer_weight(int from_idx, int to_idx) {
  *
  */
 static void distribute_weights() {
-  // log_str("c Distributing weights\n");
-  printf("c Distributing weights\n");
+  log_str("c Distributing weights\n");
 
   // Loop over all clauses, picking out those that are false
   const int uc = num_unsat_clauses;
@@ -308,9 +331,17 @@ static void distribute_weights() {
       }
 
       if (max_neighbor_idx != -1) {
-        transfer_weight(max_neighbor_idx, c_idx);
-      } else {
-        fprintf(stderr, "c NO MAX NEIGHBOR WEIGHT FOUND\n");
+        if (rand() % random_clause_prob != 0) {
+          transfer_weight(max_neighbor_idx, c_idx);
+        } else {
+          // Loop over clauses randomly until satisfied, good weight clause
+          unsigned int r_idx;
+          do {
+            r_idx = ((unsigned int) rand()) % occ;
+          } while (clause_num_true_lits[r_idx] == 0); // TODO weight case
+
+          transfer_weight(r_idx, c_idx);
+        }
       }
 
       cl_lits++;
@@ -333,14 +364,22 @@ static void run_algorithm() {
 
   int lit_to_flip;
   while (num_unsat_clauses > 0) {
+    // log_weights();
+    // TODO extreme reset
+    /*
+    for (int i = 1; i <= num_vars; i++) {
+      add_cost_compute_var(i);
+    }
+    */
+
     find_cost_reducing_literals();
     log_reducing_cost_lits();
     
     // See if any literals will reduce the weight
     // TODO no check against delta(W) = 0
-    if (num_cost_reducing_lits > 0) {
-      unsigned int rand_lit = ((unsigned int) rand()) % num_cost_reducing_lits;
-      lit_to_flip = cost_reducing_lits[rand_lit];
+    if (num_cost_reducing_vars > 0) {
+      unsigned int rand_lit = ((unsigned int) rand()) % num_cost_reducing_vars;
+      lit_to_flip = cost_reducing_vars[rand_lit];
     }// else if (num_zero_cost_lits > 0) {
       // TODO
       //printf(stderr, "No weights\n");
@@ -350,7 +389,7 @@ static void run_algorithm() {
       continue;
     }
 
-    flip_literal(lit_to_flip);
+    flip_variable(lit_to_flip);
 
     // Determine if enough loops have passed to update time variable
     timeout_loop_counter--;
@@ -368,6 +407,7 @@ static void run_algorithm() {
   // Print solution
   if (num_unsat_clauses == 0) {
     output_assignment();
+    printf("\n\nc Satisfied in %ld seconds\n", time(NULL) - seconds_at_start);
   } else {
     printf("s UNSATISFIABLE\n");
     printf("c Could not solve due to timeout.\n");

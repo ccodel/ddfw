@@ -204,7 +204,9 @@ void log_weights() {
     return;
 
   for (int i = 0; i < num_clauses; i++) {
-    log_clause(i);
+    if (clause_num_true_lits[i] <= 1) {
+      log_clause(i);
+    }
   }
 }
 
@@ -220,15 +222,15 @@ void log_reducing_cost_lits() {
   if (vlevel == SILENT)
     return;
 
-  printf("c Found %d cost reducing literals", num_cost_reducing_lits);
+  // printf("c Found %d cost reducing literals\n", num_cost_reducing_vars);
 
-  for (int i = 0; i < num_cost_reducing_lits; i++) {
-    int l_idx = POS_LIT_IDX(cost_reducing_lits[i]);
+  for (int i = 0; i < num_cost_reducing_vars; i++) {
+    int l_idx = LIT_IDX(cost_reducing_vars[i]);
     int not_l_idx = NEGATED_IDX(l_idx);
     int assigned = ASSIGNMENT(l_idx);
 
-    printf("c %d (var %d) is cost reducing, current truth value %d\n",
-        l_idx, VAR_IDX(l_idx), assigned);
+    //printf("c %d (var %d) is cost reducing, current truth value %d\n",
+    //    l_idx, VAR_IDX(l_idx), assigned);
     if (vlevel == VERBOSE) {
       printf("c   Critical clauses for this literal:\n");
 
@@ -236,11 +238,11 @@ void log_reducing_cost_lits() {
       int *l_to_clauses = literal_clauses[l_idx];
       for (int c = 0; c < occ; c++) {
         const int c_idx = *l_to_clauses;
-        if (assigned && clause_num_true_lits[c_idx] == 1) {
-          printf("c     %d has 1 sat lit, weight: %.4f\n", 
+        if (!assigned && clause_num_true_lits[c_idx] == 0) {
+          printf("c     %d has 0 sat lit, weight: (+) %.4f\n", 
               c_idx, clause_weights[c_idx]);
-        } else if (!assigned && clause_num_true_lits[c_idx] == 0) {
-          printf("c     %d has 0 sat lits, weight: %.4f\n", 
+        } else if (assigned && clause_num_true_lits[c_idx] == 1) {
+          printf("c     %d has 1 sat lits, weight: (-) %.4f\n", 
               c_idx, clause_weights[c_idx]);
         }
 
@@ -251,11 +253,11 @@ void log_reducing_cost_lits() {
       l_to_clauses = literal_clauses[not_l_idx];
       for (int c = 0; c < not_occ; c++) {
         const int c_idx = *l_to_clauses;
-        if (!assigned && clause_num_true_lits[c_idx] == 0) {
-          printf("c      %d has 0 sat lits, weight: %.4f\n", 
+        if (assigned && clause_num_true_lits[c_idx] == 0) {
+          printf("c      %d has 0 sat lits, weight: (+) %.4f\n", 
               c_idx, clause_weights[c_idx]);
-        } else if (assigned && clause_num_true_lits[c_idx] == 1) {
-          printf("c     %d has 1 sat lit, weight: %.4f\n",
+        } else if (!assigned && clause_num_true_lits[c_idx] == 1) {
+          printf("c     %d has 1 sat lit, weight: (-) %.4f\n",
               c_idx, clause_weights[c_idx]);
         }
 
@@ -271,25 +273,30 @@ void log_reducing_cost_lits() {
  *  Guiding numbers appear at the top and sides to help grid readability.
  */
 void log_assignment() {
-  if (vlevel == SILENT)
-    return;
+  switch (vlevel) {
+    case SILENT:
+      return;
+    case VERBOSE:
+      // Print out the top banner
+      printf("c Assign:   1        10        20        30        40\n");
+      printf("c           --------------------------------------------------");
 
-  // Print out the top banner
-  printf("c Assign:   1        10        20        30        40\n");
-  printf("c           --------------------------------------------------");
+      char *a = assignment + 1;
+      for (int i = 0; i < num_vars; i++) {
+        if (i % 50 == 0) {
+          printf("\nc %06d    ", i);
+        }
 
-  char *a = assignment + 1;
-  for (int i = 0; i < num_vars; i++) {
-    if (i % 50 == 0) {
-      printf("\nc %06d    ", i);
-    }
-
-    char bit = *a;
-    printf("%d", bit);
-    a++;
+        char bit = *a;
+        printf("%d", bit);
+        a++;
+      }
+    case NORMAL:
+      printf("\nThere are %d unsatisfied clauses\n", num_unsat_clauses);
+      break;
+    default:
+      unrecognized_verbosity_level();
   }
-
-  printf("\n");
 }
 
 /** @brief Prints the assignment in the satisfiable case.

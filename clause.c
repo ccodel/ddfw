@@ -36,7 +36,7 @@ int num_clauses = 0;
 // Statistics
 int num_restarts = 0;
 int num_flips = 0;
-double unsat_weight = 0;
+static int lowest_unsat_clauses = 0;
 
 // Formula information
 char *assignment = NULL;
@@ -73,9 +73,9 @@ int num_unsat_clauses = 0;
  *
  *  TODO update for _lits and _membership
  */
-int *cost_reducing_lits = NULL;
+int *cost_reducing_vars = NULL;
 int *cost_reducing_idxs = NULL;
-int num_cost_reducing_lits = 0;
+int num_cost_reducing_vars = 0;
 
 int *cost_compute_vars = NULL;
 int *cost_compute_idxs = NULL;
@@ -106,31 +106,31 @@ static inline void remove_false_clause(int c_idx) {
   }
 }
 
-void add_cost_reducing_lit(int l_idx) {
-  if (cost_reducing_idxs[l_idx] == -1) {
-    cost_reducing_idxs[l_idx] = num_cost_reducing_lits;
-    cost_reducing_lits[num_cost_reducing_lits] = l_idx;
-    num_cost_reducing_lits++;
+inline void add_cost_reducing_var(const int v_idx) {
+  if (cost_reducing_idxs[v_idx] == -1) {
+    cost_reducing_idxs[v_idx] = num_cost_reducing_vars;
+    cost_reducing_vars[num_cost_reducing_vars] = v_idx;
+    num_cost_reducing_vars++;
   }
 }
 
-static inline void remove_cost_reducing_lit(int l_idx) {
-  const int idx = cost_reducing_idxs[l_idx];
+inline void remove_cost_reducing_var(const int v_idx) {
+  const int idx = cost_reducing_idxs[v_idx];
   if (idx != -1) {
-    num_cost_reducing_lits--;
+    num_cost_reducing_vars--;
 
     // If idx is not at the end, swap the end with this index
-    if (idx != num_cost_reducing_lits) {
-      const int end_lit = cost_reducing_lits[num_cost_reducing_lits];
-      cost_reducing_lits[idx] = end_lit;
+    if (idx != num_cost_reducing_vars) {
+      const int end_lit = cost_reducing_vars[num_cost_reducing_vars];
+      cost_reducing_vars[idx] = end_lit;
       cost_reducing_idxs[end_lit] = idx;
     }
 
-    cost_reducing_idxs[l_idx] = -1;
+    cost_reducing_idxs[v_idx] = -1;
   }
 }
 
-void add_cost_compute_var(int v_idx) {
+inline void add_cost_compute_var(const int v_idx) {
   if (cost_compute_idxs[v_idx] == -1) {
     cost_compute_idxs[v_idx] = num_cost_compute_vars;
     cost_compute_vars[num_cost_compute_vars] = v_idx;
@@ -138,7 +138,7 @@ void add_cost_compute_var(int v_idx) {
   }
 }
 
-void remove_cost_compute_var(int v_idx) {
+inline void remove_cost_compute_var(const int v_idx) {
   const int idx = cost_compute_idxs[v_idx];
   if (idx != -1) {
     num_cost_compute_vars--;
@@ -204,9 +204,6 @@ void initialize_formula(int num_cs, int num_vs) {
   num_literals = 2 * num_vars;
   num_clauses = num_cs;
 
-  // Initially, compute the cost of all literals
-  num_cost_compute_vars = num_vars;
-
   const int lit_arr = num_literals + 2;
 
   log_str("c Allocating memory for %d variables and %d clauses\n",
@@ -229,9 +226,9 @@ void initialize_formula(int num_cs, int num_vs) {
   false_clause_indexes = malloc_memory(num_clauses * sizeof(int), "false ptrs");
   memset(false_clause_indexes, -1, num_clauses * sizeof(int));
   
-  cost_reducing_lits = malloc_memory(num_literals * sizeof(int), "ct red lts");
-  cost_reducing_idxs = malloc_memory(lit_arr * sizeof(int), "ct red idxs");
-  memset(cost_reducing_idxs, -1, lit_arr * sizeof(int));
+  cost_reducing_vars = malloc_memory(num_vars * sizeof(int), "cr vars");
+  cost_reducing_idxs = malloc_memory((num_vars + 1) * sizeof(int), "cr idxs");
+  memset(cost_reducing_idxs, -1, (num_vars + 1) * sizeof(int));
 
   cost_compute_vars = malloc_memory(num_vars * sizeof(int), "cc vars");
   cost_compute_idxs = malloc_memory((num_vars + 1) * sizeof(int), "cc idxs");
@@ -271,10 +268,7 @@ void process_clauses() {
   int *sizes = clause_sizes;
   int **literals = clause_literals;
 
-  // Hijack the memory for cost_reducing_lits to store an index
-  //   into literal_clauses array
-  // Clear out array first
-  memset(cost_reducing_lits, 0, num_literals * sizeof(int));
+  int *clause_counts = calloc_memory((num_literals + 2), sizeof(int), "inter");
 
   // Loop through the clauses to add clause index to each literal in the clause
   for (int c = 0; c < nc; c++) {
@@ -289,8 +283,8 @@ void process_clauses() {
             "Clause indexes");
       }
 
-      literal_clauses[l_idx][cost_reducing_lits[l_idx]] = c;
-      cost_reducing_lits[l_idx]++;
+      literal_clauses[l_idx][clause_counts[l_idx]] = c;
+      clause_counts[l_idx]++;
       lits++;
     }
 
@@ -298,10 +292,7 @@ void process_clauses() {
     literals++;
   }
 
-  printf("Hello world\n");
-
-  // Clear the cost reducing lits array once more
-  memset(cost_reducing_lits, 0, num_literals * sizeof(int));
+  free(clause_counts);
 
   // Add all literals to cost compute structure
   for (int i = 1; i <= num_vars; i++) {
@@ -397,6 +388,8 @@ void generate_random_assignment() {
     literals++;
   }
 
+  lowest_unsat_clauses = num_unsat_clauses;
+
   log_assignment();
 }
 
@@ -410,13 +403,13 @@ void generate_random_assignment() {
  *
  *  @param lit_idx The index into the literals array of the literal to flip.
  */
-void flip_literal(int lit_idx) {
-  log_str("c Flipping %d\n", lit_idx);
-
-  const int pos_lit_idx = POS_LIT_IDX(lit_idx);
+void flip_variable(const int var_idx) {
+  const int pos_lit_idx = LIT_IDX(var_idx);
   const int not_lit_idx = NEGATED_IDX(pos_lit_idx);
-  const int var_idx = VAR_IDX(lit_idx);
-  const int assigned = ASSIGNMENT(lit_idx);
+  const int assigned = ASSIGNMENT(pos_lit_idx);
+
+  // log_str("c Flipping lit %d (var %d)\n", pos_lit_idx, var_idx);
+
   add_cost_compute_var(var_idx);
 
   // Determine which literal has the truth value, to flip correct clauses
@@ -440,7 +433,7 @@ void flip_literal(int lit_idx) {
     // Remove ltieral from sat XOR mask
     clause_num_true_lits[c_idx]--;
     const int true_lits = clause_num_true_lits[c_idx];
-    clause_lit_masks[c_idx] ^= lit_idx;
+    clause_lit_masks[c_idx] ^= pos_lit_idx;
 
     // If the clause becomes critical, signal compute cost for lits in clause
     // TODO do all literals become critical?
@@ -496,9 +489,13 @@ void flip_literal(int lit_idx) {
   // int bit = 1 << shift;
   // assignment[var_idx / BITS_IN_BYTE] ^= bit;
 
-  log_str("c There are %d remaining unsatisfied clauses\n", num_unsat_clauses);
   if (get_verbosity() == VERBOSE) {
     log_assignment();
+  }
+
+  if (num_unsat_clauses < lowest_unsat_clauses) {
+    printf("c     RECORD AT %d\n", num_unsat_clauses);
+    lowest_unsat_clauses = num_unsat_clauses;
   }
 
   num_flips++;
