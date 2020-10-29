@@ -57,14 +57,14 @@ static void unrecognized_verbosity_level() {
  *  @param runtime_path The string name of the running executable, e.g. ./ddfw
  */
 void print_help(char *runtime_path) {
-  printf("%s: Divide and Distribute Fixed Weights\n", runtime_path);
+  printf("\n%s: Divide and Distribute Fixed Weights\n\n", runtime_path);
   printf("  -f <filename>       Provide a .cnf file.\n");
   printf("  -h                  Display this help message.\n");
   printf("  -q                  Quiet mode, no printing.\n");
   printf("  -s <seed>           Provide an optional randomization seed.\n");
   printf("  -t <timeout>        Provide");
   printf(" an optional number of seconds until timeout.\n");
-  printf("  -v                  Turn on verbose printing.\n");
+  printf("  -v                  Turn on verbose printing.\n\n");
 }
 
 /** @brief Print usage information when the provided arguments aren't
@@ -119,15 +119,14 @@ void set_verbosity(verbose_t verbosity_level) {
  *  @param c The index to the clause to log.
  */
 void log_clause(int c_idx) {
-  clause_t *c = &clauses[c_idx];
-
   switch (vlevel) {
     case SILENT:
       return;
     case NORMAL:
     case VERBOSE:
       printf("c Clause %d, weight: %.2f, sz: %d, sat lits: %d\n",
-          c_idx, c->weight, c->size, c->sat_lits);
+          c_idx, clause_weights[c_idx], clause_sizes[c_idx], 
+          clause_num_true_lits[c_idx]);
       break;
     default:
       unrecognized_verbosity_level();
@@ -139,21 +138,21 @@ void log_clause(int c_idx) {
  *  @param l A pointer to the literal to log.
  */
 void log_literal(int l_idx) {
-  literal_t *l = &literals[l_idx];
-
   switch (vlevel) {
     case SILENT:
       return;
     case NORMAL:
       printf("c Literal %d (var %d), occurrences: %d\n",
-          l_idx, VAR_IDX(l_idx), l->occurrences);
+          l_idx, VAR_IDX(l_idx), literal_occ[l_idx]);
       break;
     case VERBOSE:
       printf("c Literal %d (var %d), occurrences: %dc    In clauses  \n",
-          l_idx, VAR_IDX(l_idx), l->occurrences);
-      int occ = l->occurrences;
-      for (int i = 0; i < occ; i++)
-        printf("%d ", l->clause_indexes[i]);
+          l_idx, VAR_IDX(l_idx), literal_occ[l_idx]);
+      const int occ = literal_occ[l_idx];
+      int *l_to_clauses = literal_clauses[l_idx];
+      for (int i = 0; i < occ; i++) {
+        printf("%d ", l_to_clauses[i]);
+      }
       printf("\n");
       break;
     default:
@@ -183,6 +182,20 @@ void log_str(const char *format, ...) {
   }
 }
 
+/** @brief Logs the provided string according to the specified format string.
+ *         Prints to standard error.
+ *
+ *  Verbosity has no effect on error logging.
+ *
+ *  @param format A format string, such as those passed to printf().
+ *  @param ... A variable list of tokens for the format string.
+ */
+void log_err(const char *format, ...) {
+  va_list ap;
+  va_start(ap, format);
+  vfprintf(stderr, format, ap);
+}
+
 /** @brief Logs the weights associated with each clause.
  *
  */
@@ -207,65 +220,48 @@ void log_reducing_cost_lits() {
   if (vlevel == SILENT)
     return;
 
-  printf("c Found %d cost reducing literals, max val of %.4f, and %d zero\n",
-      num_reducing_cost_lits, max_reducing_cost, num_zero_cost_lits);
+  printf("c Found %d cost reducing literals", num_cost_reducing_lits);
 
-  for (int i = 0; i < num_reducing_cost_lits; i++) {
-    int l_idx = POS_LIT_IDX(reducing_cost_lits[i]);
+  for (int i = 0; i < num_cost_reducing_lits; i++) {
+    int l_idx = POS_LIT_IDX(cost_reducing_lits[i]);
     int not_l_idx = NEGATED_IDX(l_idx);
     int assigned = ASSIGNMENT(l_idx);
-    literal_t *l, *not_l;
-    if (assigned) {
-      l = &literals[l_idx];
-      not_l = &literals[not_l_idx];
-    } else {
-      l = &literals[not_l_idx];
-      not_l = &literals[l_idx];
-    }
 
     printf("c %d (var %d) is cost reducing, current truth value %d\n",
         l_idx, VAR_IDX(l_idx), assigned);
     if (vlevel == VERBOSE) {
       printf("c   Critical clauses for this literal:\n");
 
-      const int occ = l->occurrences;
+      const int occ = literal_occ[l_idx];
+      int *l_to_clauses = literal_clauses[l_idx];
       for (int c = 0; c < occ; c++) {
-        int c_idx = l->clause_indexes[c];
-        clause_t *cl = &clauses[c_idx];
-
-        if (cl->sat_lits == 1) {
-          printf("c     %d has 1 sat lit, weight: %.4f\n", c_idx, cl->weight);
+        const int c_idx = *l_to_clauses;
+        if (assigned && clause_num_true_lits[c_idx] == 1) {
+          printf("c     %d has 1 sat lit, weight: %.4f\n", 
+              c_idx, clause_weights[c_idx]);
+        } else if (!assigned && clause_num_true_lits[c_idx] == 0) {
+          printf("c     %d has 0 sat lits, weight: %.4f\n", 
+              c_idx, clause_weights[c_idx]);
         }
+
+        l_to_clauses++;
       }
 
-      const int not_occ = not_l->occurrences;
+      const int not_occ = literal_occ[not_l_idx];
+      l_to_clauses = literal_clauses[not_l_idx];
       for (int c = 0; c < not_occ; c++) {
-        int c_idx = not_l->clause_indexes[c];
-        clause_t *cl = &clauses[c_idx];
-
-        if (cl->sat_lits == 0) {
+        const int c_idx = *l_to_clauses;
+        if (!assigned && clause_num_true_lits[c_idx] == 0) {
           printf("c      %d has 0 sat lits, weight: %.4f\n", 
-              c_idx, cl->weight);
+              c_idx, clause_weights[c_idx]);
+        } else if (assigned && clause_num_true_lits[c_idx] == 1) {
+          printf("c     %d has 1 sat lit, weight: %.4f\n",
+              c_idx, clause_weights[c_idx]);
         }
+
+        l_to_clauses++;
       }
     }
-  }
-
-  for (int i = 0; i < num_zero_cost_lits; i++) {
-    int l_idx = POS_LIT_IDX(reducing_cost_lits[num_literals - i - 1]);
-    int not_l_idx = NEGATED_IDX(l_idx);
-    int assigned = ASSIGNMENT(l_idx);
-    literal_t *l, *not_l;
-    if (assigned) {
-      l = &literals[l_idx];
-      not_l = &literals[not_l_idx];
-    } else {
-      l = &literals[not_l_idx];
-      not_l = &literals[l_idx];
-    }
-
-    printf("c %d (var %d) is zero reducing, current truth value %d\n",
-        l_idx, VAR_IDX(l_idx), assigned);
   }
 }
 

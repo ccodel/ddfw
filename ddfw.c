@@ -78,7 +78,6 @@
 #include <getopt.h>
 #include <time.h>
 
-#include "ddfw_types.h"
 #include "clause.h"
 #include "cnf_parser.h"
 #include "logger.h"
@@ -169,174 +168,64 @@ static int *reducing_cost_copy = NULL;
  *
  */
 static void find_cost_reducing_literals() {
-  // Set the index to 0 to fill in "positive" literals as we go along
-  num_reducing_cost_lits = 0;
-  num_zero_cost_lits = 0;
-  max_reducing_cost = 0.0;
+  // Loop through those variables in the cost_compute_vars to compute cost
+  // Most efficient to do from the back of the cost compute vars array
+  int *cc_vars = cost_compute_vars + num_cost_compute_vars - 1;
+  const int num_cc_vars = num_cost_compute_vars;
+  for (int i = 0; i < num_cc_vars; i++) {
+    const int v_idx = *cc_vars;
+    const int l_idx = LIT_IDX(v_idx);
+    const int assigned = ASSIGNMENT(l_idx);
+    double satisfied_weight = 0.0;
+    double unsatisfied_weight = 0.0;
 
-  // TODO remove
-  // reducing_cost_num = 0;
-  // reducing_cost_zero = 0;
-
-  for (int i = 1; i <= num_vars; i++) {
-    int l_idx = LIT_IDX(i);
-    int not_l_idx = NEGATED_IDX(l_idx);
-    double satisfied_weight = 0.0;   // Weight "lost" when sat clauses on flip
-    double unsatisfied_weight = 0.0; // Weight "gained" on unsat clauses
-    int assigned = ASSIGNMENT(l_idx); // TODO repeated computation-ish
-    literal_t *l, *not_l;
+    // Determine the index of the true literal
+    int true_idx, false_idx;
     if (assigned) {
-      l = &literals[l_idx];
-      not_l = &literals[not_l_idx];
+      true_idx = l_idx;
+      false_idx = NEGATED_IDX(l_idx);
     } else {
-      l = &literals[not_l_idx];
-      not_l = &literals[l_idx];
+      true_idx = NEGATED_IDX(l_idx);
+      false_idx = l_idx;
     }
 
-    // Check if the literal has been marked already
-    if (IS_RED_COST_POS(&literals[l_idx])) {
-      // printf("Found that %d is positive reducing marked\n", l_idx);
-      reducing_cost_lits[num_reducing_cost_lits] = l_idx;
-      num_reducing_cost_lits++;
-      continue;
-    } else if (IS_RED_COST_ZERO(&literals[l_idx])) {
-     // printf("Found that %d is zero reducing marked\n", l_idx);
-      reducing_cost_lits[num_literals - num_zero_cost_lits - 1] = l_idx;
-      num_zero_cost_lits++;
-      continue;
-    }
+    const int true_occ = literal_occ[true_idx];
+    const int false_occ = literal_occ[false_idx];
 
-    const int occ = l->occurrences;
-    const int not_occ = not_l->occurrences;
-
-    // Loop over satisfied claueses containing the "true" literal
-    for (int c = 0; c < occ; c++) {
-      int c_idx = l->clause_indexes[c];
-      clause_t *cl = &clauses[c_idx];
-      if (cl->sat_lits == 1) {
-        unsatisfied_weight += cl->weight;
+    // Loop over satisfied clauses containing the true literal
+    int *l_to_clauses = literal_clauses[true_idx];
+    for (int c = 0; c < true_occ; c++) {
+      const int c_idx = *l_to_clauses;
+      if (clause_num_true_lits[c_idx] == 1) {
+        unsatisfied_weight += clause_weights[c_idx];
       }
+
+      l_to_clauses++;
     }
 
-    // Loop over unsatisfied clauses containing the "false" literal
-    for (int c = 0; c < not_occ; c++) {
-      int c_idx = not_l->clause_indexes[c];
-      clause_t *cl = &clauses[c_idx];
-      if (cl->sat_lits == 0) {
-        satisfied_weight = cl->weight;
+    // Loop over unsatisfied clauses containing the false literal
+    l_to_clauses = literal_clauses[false_idx];
+    for (int c = 0; c < false_occ; c++) {
+      const int c_idx = *l_to_clauses;
+      if (clause_num_true_lits[c_idx] == 0) {
+        satisfied_weight += clause_weights[c_idx];
       }
+
+      l_to_clauses++;
     }
 
-    // Determine if flipping the truth value of the "true" literal
-    // will result in more satisfied weight than unsatisfied weight
-    double diff = satisfied_weight - unsatisfied_weight;
-    if (diff == 0.0) {
-      reducing_cost_lits[num_literals - num_zero_cost_lits - 1] = l_idx;
-      num_zero_cost_lits++;
-      MARK_RED_COST_ZERO(&literals[l_idx]);
-    } else if (diff >= 0.0) {
-      reducing_cost_lits[num_reducing_cost_lits] = l_idx;
-      num_reducing_cost_lits++;
-      MARK_RED_COST_POS(&literals[l_idx]);
-      max_reducing_cost = MAX(max_reducing_cost, diff);
+    // Determine if flipping the truth value of the true literal
+    //   would result in more satisfied weight than unsatisfied weight
+    const double diff = satisfied_weight - unsatisfied_weight;
+    if (diff >= 0.0) {
+      // Add to cost reducing lits
+      add_cost_reducing_lit(true_idx); // Filter out 0 cost variables?
     }
+
+    // Remove var from compute list
+    remove_cost_compute_var(v_idx);
+    cc_vars--;
   }
-
-  // Loop over those marked
-  /*
-  for (int i = 1; i <= num_vars; i++) {
-    int l_idx = LIT_IDX(i);
-    int not_l_idx = NEGATED_IDX(l_idx);
-    double satisfied_weight = 0.0;   // Weight "lost" when sat clauses on flip
-    double unsatisfied_weight = 0.0; // Weight "gained" on unsat clauses
-    int assigned = ASSIGNMENT(l_idx); // TODO repeated computation-ish
-    literal_t *l, *not_l;
-    if (assigned) {
-      l = &literals[l_idx];
-      not_l = &literals[not_l_idx];
-    } else {
-      l = &literals[not_l_idx];
-      not_l = &literals[l_idx];
-    }
-
-    // Check if the literal has been marked already
-    if (IS_RED_COST_POS(&literals[l_idx])) {
-      // printf("Found that %d is positive reducing marked\n", l_idx);
-      reducing_cost_copy[reducing_cost_num] = l_idx;
-      reducing_cost_num++;
-      continue;
-    } else if (IS_RED_COST_ZERO(&literals[l_idx])) {
-     // printf("Found that %d is zero reducing marked\n", l_idx);
-      reducing_cost_copy[num_literals - reducing_cost_zero - 1] = l_idx;
-      reducing_cost_zero++;
-      continue;
-    }
-
-    // Otherwise, has not been marked yet
-    const int occ = l->occurrences;
-    const int not_occ = not_l->occurrences;
-
-    // Loop over satisfied claueses containing the "true" literal
-    for (int c = 0; c < occ; c++) {
-      int c_idx = l->clause_indexes[c];
-      clause_t *cl = &clauses[c_idx];
-      if (cl->sat_lits == 1) {
-        unsatisfied_weight += cl->weight;
-      }
-    }
-
-    // Loop over unsatisfied clauses containing the "false" literal
-    for (int c = 0; c < not_occ; c++) {
-      int c_idx = not_l->clause_indexes[c];
-      clause_t *cl = &clauses[c_idx];
-      if (cl->sat_lits == 0) {
-        satisfied_weight = cl->weight;
-      }
-    }
-
-    // Determine if flipping the truth value of the "true" literal
-    // will result in more satisfied weight than unsatisfied weight
-    double diff = satisfied_weight - unsatisfied_weight;
-    if (diff == 0.0) {
-      reducing_cost_copy[num_literals - reducing_cost_zero - 1] = l_idx;
-      reducing_cost_zero++;
-      MARK_RED_COST_ZERO(&literals[l_idx]);
-    } else if (diff >= 0.0) {
-      reducing_cost_copy[reducing_cost_num] = l_idx;
-      reducing_cost_num++;
-      MARK_RED_COST_POS(&literals[l_idx]);
-      max_reducing_cost = MAX(max_reducing_cost, diff);
-    }
-  }
-
-  // Check if the two arrays are equal
-  if (memcmp(reducing_cost_copy, reducing_cost_lits, 
-        num_literals * sizeof(int)) != 0) {
-    printf("c The two arrays were not equal on flip %d\n", flips);
-    for (int i = 0; i < num_literals; i++) {
-      if (reducing_cost_lits[i] != reducing_cost_copy[i]) {
-        printf("%d != %d at %d\n",
-            reducing_cost_lits[i], reducing_cost_copy[i], i);
-      }
-    }
-
-    sleep(5);
-
-    
-    printf("1st: [");
-    for (int i = 0; i < num_literals; i++) {
-      printf("%d ", reducing_cost_lits[i]);
-    }
-    printf("]\n2nd: [");
-    for (int i = 0; i < num_literals; i++) {
-      printf("%d ", reducing_cost_copy[i]);
-    }
-    printf("]\n");
-    
-  }// else {
-  //  printf("c Identical arrays\n");
-  //}
-  */
 }
 
 /** @brief Transfers weight from one clause to another in the distribute step.
@@ -347,24 +236,31 @@ static void find_cost_reducing_literals() {
  *   
  *   - halving the weight of the satisfied clause
  *   - adding that weight to the unsatisfied clause
+ *
+ *  @param from_idx The clause index that weight is taken from.
+ *  @param to_idx   The clause index that weight is given to.
  */
-static inline void transfer_weight(clause_t *from, clause_t *to) {
-  from->weight /= 2.0;
-  to->weight += from->weight;
+static inline void transfer_weight(int from_idx, int to_idx) {
+  clause_weights[from_idx] /= 2.0;
+  clause_weights[to_idx] += clause_weights[from_idx];
 
-  // Clear markings of literals involved in the two clauses
-  const int from_size = from->size;
-  const int to_size = to->size;
+  // Signal compute cost of literals in the two clauses
+  const int from_size = clause_sizes[from_idx];
+  const int to_size = clause_sizes[to_idx];
+  int *from_lits = clause_literals[from_idx];
+  int *to_lits = clause_literals[to_idx];
+
+  // TODO must all variables be made critical?
   for (int l = 0; l < from_size; l++) {
-    int l_idx = POS_LIT_IDX(from->literals[l]);
-    literal_t *lit = &literals[l_idx];
-    CLEAR_MARKING(lit);
+    const int l_idx = *from_lits;
+    add_cost_compute_var(VAR_IDX(l_idx));
+    from_lits++;
   }
 
   for (int l = 0; l < to_size; l++) {
-    int l_idx = POS_LIT_IDX(to->literals[l]);
-    literal_t *lit = &literals[l_idx];
-    CLEAR_MARKING(lit);
+    const int l_idx = *to_lits;
+    add_cost_compute_var(VAR_IDX(l_idx));
+    to_lits++;
   }
 }
 
@@ -382,48 +278,45 @@ static void distribute_weights() {
   // log_str("c Distributing weights\n");
   printf("c Distributing weights\n");
 
-  // TODO to be safe, clear all literal markings
-  /*
-  for (int i = 1; i <= num_vars; i++) {
-    int l_idx = LIT_IDX(i);
-    literal_t *l = &literals[l_idx];
-    CLEAR_MARKING(l);
-  }
-  */
-
   // Loop over all clauses, picking out those that are false
-  for (int c = 0; c < num_clauses; c++) {
-    clause_t *cl = &clauses[c];
-    if (cl->sat_lits > 0)
-      continue;
+  const int uc = num_unsat_clauses;
+  int *false_clauses = false_clause_members;
+  for (int c = 0; c < uc; c++) {
+    const int c_idx = *false_clauses;
+    const int size = clause_sizes[c_idx];
 
-    int size = cl->size;
     int max_neighbor_idx = -1;
     double max_neighbor_weight = -1.0;
 
-    // Loop over the literals in the cl clause
+    // Loop over the literals in the clause to search for neighboring sat clause
+    int *cl_lits = clause_literals[c_idx];
     for (int l = 0; l < size; l++) {
-      int l_idx = cl->literals[l];
-      literal_t *l = &literals[l_idx];
-      const int occ = l->occurrences;
+      const int l_idx = *cl_lits;
+      const int occ = literal_occ[l_idx];
 
-      // For each literal, search its neighbors for a satisfied clause
+      // For each literal, search neighbors for a satisfied clause
+      int *l_clauses = literal_clauses[l_idx];
       for (int cn = 0; cn < occ; cn++) {
-        int c_idx = l->clause_indexes[cn];
-        clause_t *c_neigh = &clauses[c_idx];
-        if (c_neigh->sat_lits > 0 && c_neigh->weight > max_neighbor_weight) {
-          max_neighbor_idx = c_idx;
-          max_neighbor_weight = c_neigh->weight;
+        const int cn_idx = *l_clauses;
+        if (clause_num_true_lits[cn_idx] > 0 
+            && clause_weights[cn_idx] > max_neighbor_weight) {
+          max_neighbor_idx = cn_idx;
+          max_neighbor_weight = clause_weights[cn_idx];
         }
+
+        l_clauses++;
       }
+
+      if (max_neighbor_idx != -1) {
+        transfer_weight(max_neighbor_idx, c_idx);
+      } else {
+        fprintf(stderr, "c NO MAX NEIGHBOR WEIGHT FOUND\n");
+      }
+
+      cl_lits++;
     }
 
-    if (max_neighbor_idx != -1) {
-      clause_t *c_neigh = &clauses[max_neighbor_idx];
-      transfer_weight(c_neigh, cl);
-    } else {
-      fprintf(stderr, "c NO MAX NEIGHBOR WEIGHT FOUND\n");
-    }
+    false_clauses++;
   }
 }
 
@@ -439,15 +332,15 @@ static void run_algorithm() {
   int seconds_at_start = time(NULL);
 
   int lit_to_flip;
-  while (unsat_clauses > 0) {
+  while (num_unsat_clauses > 0) {
     find_cost_reducing_literals();
     log_reducing_cost_lits();
     
     // See if any literals will reduce the weight
     // TODO no check against delta(W) = 0
-    if (num_reducing_cost_lits > 0) {
-      int rand_lit = rand() % num_reducing_cost_lits;
-      lit_to_flip = reducing_cost_lits[rand_lit];
+    if (num_cost_reducing_lits > 0) {
+      unsigned int rand_lit = ((unsigned int) rand()) % num_cost_reducing_lits;
+      lit_to_flip = cost_reducing_lits[rand_lit];
     }// else if (num_zero_cost_lits > 0) {
       // TODO
       //printf(stderr, "No weights\n");
@@ -463,7 +356,7 @@ static void run_algorithm() {
     timeout_loop_counter--;
     if (timeout_loop_counter == 0) {
       printf("c There are now %d unsat clauses after %d flips\n",
-          unsat_clauses, flips);
+          num_unsat_clauses, num_flips);
       timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
 
       // Check for timeout
@@ -473,7 +366,7 @@ static void run_algorithm() {
   }
 
   // Print solution
-  if (unsat_clauses == 0) {
+  if (num_unsat_clauses == 0) {
     output_assignment();
   } else {
     printf("s UNSATISFIABLE\n");

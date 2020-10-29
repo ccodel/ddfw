@@ -10,9 +10,9 @@ FILES = ddfw.o clause.o logger.o cnf_parser.o
 ddfw: ddfw.o logger.o clause.o cnf_parser.o
 	$(CC) $(CFLAGS) -o ddfw $(FILES)
 
-ddfw.o: ddfw.c logger.o cnf_parser.o clause.o ddfw_types.h 
+ddfw.o: ddfw.c logger.o cnf_parser.o clause.o 
 logger.o: logger.c logger.h clause.o
-clause.o: clause.c clause.h ddfw_types.h
+clause.o: clause.c clause.h 
 cnf_parser.o: cnf_parser.c cnf_parser.h clause.o
 
 clean:

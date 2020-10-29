@@ -11,7 +11,6 @@
 #ifndef _CNF_PARSER_H_
 #define _CNF_PARSER_H_
 
-#include "ddfw_types.h"
 #include "clause.h"
 
 /** DIMACS character that starts a comment line. */

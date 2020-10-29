@@ -11,9 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "ddfw_types.h"
 #include "clause.h"
 #include "logger.h"
+
+#include <stdio.h>
 
 #ifndef ABS
 #define ABS(x)   (((x) < 0) ? -(x) : (x))
@@ -27,19 +28,37 @@
 #define MAX(x, y)  (((x) > (y)) ? (x) : (y))
 #endif
 
+// CNF information
+int num_vars = 0;
 int num_literals = 0;
 int num_clauses = 0;
-int num_vars = 0;
-int num_reducing_cost_lits = 0;
-int num_zero_cost_lits = 0;
-double max_reducing_cost = 0.0;
-int flips = 0;
-int unsat_clauses = 0;
 
+// Statistics
+int num_restarts = 0;
+int num_flips = 0;
+double unsat_weight = 0;
+
+// Formula information
 char *assignment = NULL;
-literal_t *literals = NULL;
-clause_t *clauses = NULL;
 
+// Clause information - 0 indexed
+int *clause_sizes = NULL;
+double *clause_weights = NULL;
+int *clause_num_true_lits = NULL;
+int *clause_lit_masks = NULL;
+int **clause_literals = NULL;
+
+// Literal information - 2-indexed (use LIT_IDX)
+int *literal_occ = NULL;
+int **literal_clauses = NULL;
+
+// Bookkeeping structures
+// Membership struct for false clauses
+int *false_clause_members = NULL;
+int *false_clause_indexes = NULL;
+int num_unsat_clauses = 0;
+
+// Membership struct for cost reducing literals
 /** @brief The array containing indexes of literals that, if flipped,
  *         reduce the cost of the unsatisfied literals.
  *
@@ -51,8 +70,125 @@ clause_t *clauses = NULL;
  *  that result in no weight change on a flip are placed "in the back" of
  *  the array. The variables num_reducing_cost_lits and num_zero_cost_lits
  *  are updated accordingly.
+ *
+ *  TODO update for _lits and _membership
  */
-int *reducing_cost_lits = NULL;
+int *cost_reducing_lits = NULL;
+int *cost_reducing_idxs = NULL;
+int num_cost_reducing_lits = 0;
+
+int *cost_compute_vars = NULL;
+int *cost_compute_idxs = NULL;
+int num_cost_compute_vars = 0;
+
+// TODO make this general / into a macro
+static inline void add_false_clause(int c_idx) {
+  if (false_clause_indexes[c_idx] == -1) {
+    false_clause_indexes[c_idx] = num_unsat_clauses;
+    false_clause_members[num_unsat_clauses] = c_idx;
+    num_unsat_clauses++;
+  }
+}
+
+static inline void remove_false_clause(int c_idx) {
+  const int idx = false_clause_indexes[c_idx];
+  if (idx != -1) {
+    num_unsat_clauses--;
+
+    // If idx is not at the end, move the end of members to this index
+    if (idx != num_unsat_clauses) {
+      const int end_clause = false_clause_members[num_unsat_clauses];
+      false_clause_members[idx] = end_clause;
+      false_clause_indexes[end_clause] = idx;
+    }
+    
+    false_clause_indexes[c_idx] = -1;
+  }
+}
+
+void add_cost_reducing_lit(int l_idx) {
+  if (cost_reducing_idxs[l_idx] == -1) {
+    cost_reducing_idxs[l_idx] = num_cost_reducing_lits;
+    cost_reducing_lits[num_cost_reducing_lits] = l_idx;
+    num_cost_reducing_lits++;
+  }
+}
+
+static inline void remove_cost_reducing_lit(int l_idx) {
+  const int idx = cost_reducing_idxs[l_idx];
+  if (idx != -1) {
+    num_cost_reducing_lits--;
+
+    // If idx is not at the end, swap the end with this index
+    if (idx != num_cost_reducing_lits) {
+      const int end_lit = cost_reducing_lits[num_cost_reducing_lits];
+      cost_reducing_lits[idx] = end_lit;
+      cost_reducing_idxs[end_lit] = idx;
+    }
+
+    cost_reducing_idxs[l_idx] = -1;
+  }
+}
+
+void add_cost_compute_var(int v_idx) {
+  if (cost_compute_idxs[v_idx] == -1) {
+    cost_compute_idxs[v_idx] = num_cost_compute_vars;
+    cost_compute_vars[num_cost_compute_vars] = v_idx;
+    num_cost_compute_vars++;
+  }
+}
+
+void remove_cost_compute_var(int v_idx) {
+  const int idx = cost_compute_idxs[v_idx];
+  if (idx != -1) {
+    num_cost_compute_vars--;
+
+    // If idx is not at the end, swap the end with this index
+    if (idx != num_cost_compute_vars) {
+      const int end_var = cost_compute_vars[num_cost_compute_vars];
+      cost_compute_vars[idx] = end_var;
+      cost_compute_idxs[end_var] = idx;
+    }
+
+    cost_compute_idxs[v_idx] = -1;
+  }
+}
+
+/** @brief Calls malloc() with an error printing wrapper.
+ *
+ *  Exits the process if not enough memory is available.
+ *
+ *  @param size    The size to allocate, in bytes.
+ *  @param err_str The item being allocated, to print on allocation failure.
+ */
+static void *malloc_memory(int size, char *err_str) {
+  void *ptr = malloc(size);
+  if (ptr == NULL) {
+    log_err("c Ran out of memory when allocating %s, exiting", err_str);
+    exit(-1);
+  }
+
+  return ptr;
+}
+
+/** @brief Calls calloc() with an error printing wrapper.
+ *
+ *  Exits the process if not enough memory is available.
+ *
+ *  @param elems   The number of elements to allocate.
+ *  @param size    The size of each element, in bytes.
+ *  @param err_str The item being allocated, to print on allocation failure.
+ */
+static void *calloc_memory(int elems, int size, char *err_str) {
+  void *ptr = calloc(elems, size);
+  if (ptr == NULL) {
+    log_err("c Ran out of memory when allocating %s, exiting", err_str);
+    exit(-1);
+  }
+
+  return ptr;
+}
+
 
 /** @brief Initializes the global formula to get ready for the specified
  *         number of clauses and variables/literals. Allocates the necessary
@@ -63,55 +199,49 @@ int *reducing_cost_lits = NULL;
  */
 void initialize_formula(int num_cs, int num_vs) {
   // Set global formula variables
+  // Other global variables were given their default values above
   num_vars = num_vs;
   num_literals = 2 * num_vars;
   num_clauses = num_cs;
-  num_reducing_cost_lits = 0;
-  flips = 0;
-  unsat_clauses = 0;
+
+  // Initially, compute the cost of all literals
+  num_cost_compute_vars = num_vars;
+
+  const int lit_arr = num_literals + 2;
 
   log_str("c Allocating memory for %d variables and %d clauses\n",
       num_vars, num_clauses);
 
-  // The assignment WAS a bitvector, so round up to a multiple of BITS_IN_BYTE
-  // The addition of BITS_IN_BYTE ensures that integer division does not
-  // "cut off" var truth values. Note that assignment is 1-indexed.
-  //assignment = malloc(
-  //    ((num_vars + BITS_IN_BYTE) / BITS_IN_BYTE) * sizeof(char));
-  assignment = malloc((num_vars + 1) * sizeof(char));
-  if (assignment == NULL) {
-    log_str("c Ran out of memory when allocating assignment, exiting\n");
-    exit(-1);
-  }
+  // Allocate all global pointer structures
+  assignment = malloc_memory((num_vars + 1) * sizeof(char), "assignment");
 
-  // TODO repeat code
-  // Need calloc to zero out pointers, see process_clauses()
-  // Need to add two to allow for 1-indexing of the literals array
-  literals = calloc((num_literals + 2), sizeof(literal_t));
-  if (literals == NULL) {
-    log_str("c Ran out of memory when allocating literals, exiting\n");
-    exit(-1);
-  }
+  // TODO which need to be calloced?
+  clause_sizes = malloc_memory(num_clauses * sizeof(int), "cl sizes");
+  clause_weights = malloc_memory(num_clauses * sizeof(double), "weights");
+  clause_num_true_lits =  malloc_memory(num_clauses * sizeof(int), "true lits");
+  clause_lit_masks = malloc_memory(num_clauses * sizeof(int), "lit masks");
+  clause_literals = calloc_memory(num_clauses, sizeof(int *), "cl lits");
 
-  clauses = malloc(num_clauses * sizeof(clause_t));
-  if (clauses == NULL) {
-    log_str("c Ran out of memory when allocating clauses, exiting\n");
-    exit(-1);
-  }
+  literal_occ = calloc_memory(lit_arr, sizeof(int), "occurrences");
+  literal_clauses = calloc_memory(lit_arr, sizeof(int *), "lit cls");
 
-  // Zero out because array comparison
-  reducing_cost_lits = calloc(num_literals, sizeof(int));
-  if (reducing_cost_lits == NULL) {
-    log_str("c Ran out of memory when allocating extras, exiting\n");
-    exit(-1);
-  }
+  false_clause_members = malloc_memory(num_clauses * sizeof(int), "false cls");
+  false_clause_indexes = malloc_memory(num_clauses * sizeof(int), "false ptrs");
+  memset(false_clause_indexes, -1, num_clauses * sizeof(int));
+  
+  cost_reducing_lits = malloc_memory(num_literals * sizeof(int), "ct red lts");
+  cost_reducing_idxs = malloc_memory(lit_arr * sizeof(int), "ct red idxs");
+  memset(cost_reducing_idxs, -1, lit_arr * sizeof(int));
 
+  cost_compute_vars = malloc_memory(num_vars * sizeof(int), "cc vars");
+  cost_compute_idxs = malloc_memory((num_vars + 1) * sizeof(int), "cc idxs");
+  memset(cost_compute_idxs, -1, (num_vars + 1) * sizeof(int));
+  
   log_str("c Allocated memory successfully\n");
 }
 
 /** @brief Initializes the clause at the specified index.
  *
- *  A clause is defined as a clause_t struct in the clauses array.
  *  TODO
  *
  *  @param clause_idx  The index into the formula->clauses array.
@@ -119,62 +249,63 @@ void initialize_formula(int num_cs, int num_vs) {
  *  @param lit_idxs    The indexes into formula->literals for the clause's lits.
  */
 void initialize_clause(int clause_idx, int size, int *lit_idxs) {
-  clause_t *c = &clauses[clause_idx];
-  c->size = size;
-  c->weight = DEFAULT_CLAUSE_WEIGHT;
-  c->literals = malloc(size * sizeof(int));
-  if (c->literals == NULL) {
-    log_str("c Ran out of memory when allocating clause literals, exiting\n");
-    exit(-1);
-  }
-
-  memcpy(c->literals, lit_idxs, size * sizeof(int));
+  // Note that clause_num_true_lits and clause_lit_masks will be set
+  // when the assignment is randomized, and so do not need to be init. here
+  clause_sizes[clause_idx] = size;
+  clause_weights[clause_idx] = DEFAULT_CLAUSE_WEIGHT;
+  clause_literals[clause_idx] = malloc_memory(size * sizeof(int), "cl lits");
+  memcpy(clause_literals[clause_idx], lit_idxs, size * sizeof(int));
 }
 
 /** @brief Processes the clauses read in from the CNF input file and before
  *         the DDFW algorithm is run.
  *
  *  Some post-processing that is done is
- *    - Set up clause pointers in each literal TODO efficiency?
- *  
+ *    - TODO fill in
+ *
  *  @return void, but calls exit(-1) on memory allocation failure.
  */
 void process_clauses() {
   // Alias variables
-  const int nc = num_clauses; // TODO remove?
-  const int nl = num_literals; // TODO remove?
+  const int nc = num_clauses;
+  int *sizes = clause_sizes;
+  int **literals = clause_literals;
 
-  // Loop through each literal in each clause and add the clause to the literal
-  // Store literal in clause information in l->clause_indexes.
-  // Hijack the l->marking int for clause index, reset to 0 at end
+  // Hijack the memory for cost_reducing_lits to store an index
+  //   into literal_clauses array
+  // Clear out array first
+  memset(cost_reducing_lits, 0, num_literals * sizeof(int));
+
+  // Loop through the clauses to add clause index to each literal in the clause
   for (int c = 0; c < nc; c++) {
-    clause_t *cl = &clauses[c];
-    const int size = cl->size;
-    int *lits = cl->literals;
+    const int size = *sizes;
+    int *lits = *literals;
+
+    // For each literal in the clause, add the clause to the literal
     for (int l = 0; l < size; l++) {
-      int l_idx = lits[l];
-      literal_t *lit = &literals[l_idx];
-      
-      // If the literal hasn't been touched yet, allocate space for clause idxs
-      if (lit->clause_indexes == NULL) {
-        lit->clause_indexes = malloc(lit->occurrences * sizeof(int));
-        if (lit->clause_indexes == NULL) {
-          log_str("c Error: Unable to allocate memory for clause indexes\n");
-          exit(-1);
-        }
-        lit->marking = 0;
+      const int l_idx = *lits;
+      if (literal_clauses[l_idx] == NULL) {
+        literal_clauses[l_idx] = malloc_memory(literal_occ[l_idx] * sizeof(int),
+            "Clause indexes");
       }
 
-      // Add the clause index to the literal
-      lit->clause_indexes[lit->marking] = c;
-      lit->marking++;
+      literal_clauses[l_idx][cost_reducing_lits[l_idx]] = c;
+      cost_reducing_lits[l_idx]++;
+      lits++;
     }
+
+    sizes++;
+    literals++;
   }
 
-  // Set all lit->marking variables to 0
-  for (int l = 0; l <= nl; l++) {
-    literal_t *lit = &literals[l];
-    lit->marking = 0;
+  printf("Hello world\n");
+
+  // Clear the cost reducing lits array once more
+  memset(cost_reducing_lits, 0, num_literals * sizeof(int));
+
+  // Add all literals to cost compute structure
+  for (int i = 1; i <= num_vars; i++) {
+    add_cost_compute_var(i);
   }
 }
 
@@ -223,29 +354,47 @@ void generate_random_assignment() {
   // TODO think about whether clause -> literal is faster than literal -> clause
   // Iterate through the clauses to see which are satisfied
   const int nc = num_clauses;
+  int *mask = clause_lit_masks;
+  int *sizes = clause_sizes;
+  int *true_lits = clause_num_true_lits;
+  int **literals = clause_literals;
+  int new_mask, sat_lits;
+
   for (int i = 0; i < nc; i++) {
-    clause_t *c = &clauses[i];
-    c->sat_lits = 0;
-    c->sat_mask = 0;
+    sat_lits = 0;
+    new_mask = 0;
+    int *ls = *literals;
+    const int size = *sizes;
 
     // Loop through the literals to see how many are satisfied
-    int *lits = c->literals;
-    const int size = c->size;
     for (int l = 0; l < size; l++) {
-      int lit_idx = lits[l];
+      int lit_idx = *ls;
       int negated = IS_NEGATED(lit_idx);
       int assigned = ASSIGNMENT(lit_idx);
 
       // If the literal evaluates to true, update clause information
       if ((assigned && !negated) || (!assigned && negated)) {
-        c->sat_lits++;
-        c->sat_mask ^= lit_idx;
+        sat_lits++;
+        new_mask ^= lit_idx;
       }
+
+      ls++;
     }
 
-    if (c->sat_lits == 0) {
-      unsat_clauses++;
+    // If not satisfied, update membership in false clauses
+    if (sat_lits == 0) {
+      add_false_clause(i);
     }
+
+    // Store lit and mask information back to the arrays
+    *true_lits = sat_lits;
+    *mask = new_mask;
+
+    // Move pointers to next clause
+    sizes++;
+    mask++;
+    true_lits++;
+    literals++;
   }
 
   log_assignment();
@@ -267,70 +416,78 @@ void flip_literal(int lit_idx) {
   const int pos_lit_idx = POS_LIT_IDX(lit_idx);
   const int not_lit_idx = NEGATED_IDX(pos_lit_idx);
   const int var_idx = VAR_IDX(lit_idx);
-  int assigned = ASSIGNMENT(lit_idx);
+  const int assigned = ASSIGNMENT(lit_idx);
+  add_cost_compute_var(var_idx);
 
-  // TODO Clear markings in the positive literal - always remove?
-  literal_t *l, *not_l;
+  // Determine which literal has the truth value, to flip correct clauses
+  int l_idx, not_l_idx;
   if (assigned) {
-    l = &literals[pos_lit_idx];
-    CLEAR_MARKING(l);
-    not_l = &literals[not_lit_idx];
+    l_idx = pos_lit_idx;
+    not_l_idx = not_lit_idx;
   } else {
-    l = &literals[not_lit_idx];
-    not_l = &literals[pos_lit_idx];
-    CLEAR_MARKING(not_l);
+    l_idx = not_lit_idx;
+    not_l_idx = pos_lit_idx;
   }
 
-  int occ = l->occurrences;
-  int not_occ = not_l->occurrences;
+  const int l_occ = literal_occ[l_idx];
+  const int not_occ = literal_occ[not_l_idx];
 
   // For each clause containing l, set l to false
-  for (int c = 0; c < occ; c++) {
-    int c_idx = l->clause_indexes[c];
-    clause_t *cl = &clauses[c_idx];
+  int *l_to_clauses = literal_clauses[l_idx];
+  for (int c = 0; c < l_occ; c++) {
+    const int c_idx = *l_to_clauses;
 
     // Remove ltieral from sat XOR mask
-    cl->sat_lits--;
-    cl->sat_mask ^= lit_idx;
+    clause_num_true_lits[c_idx]--;
+    const int true_lits = clause_num_true_lits[c_idx];
+    clause_lit_masks[c_idx] ^= lit_idx;
 
-    // If the clause becomes critical, 
-    // Clear markings of literals involved in the clause
-    if (cl->sat_lits <= 1) {
-      const int size = cl->size;
+    // If the clause becomes critical, signal compute cost for lits in clause
+    // TODO do all literals become critical?
+    if (true_lits <= 1) {
+      const int size = clause_sizes[c_idx];
+      int *c_to_lits = clause_literals[c_idx];
       for (int cl_lit = 0; cl_lit < size; cl_lit++) {
-        int l_idx = POS_LIT_IDX(cl->literals[cl_lit]);
-        literal_t *clause_literal = &literals[l_idx];
-        CLEAR_MARKING(clause_literal);
+        const int cl_var_idx = VAR_IDX(*c_to_lits);
+        add_cost_compute_var(cl_var_idx); 
+        c_to_lits++;
       }
     }
 
-    if (cl->sat_lits == 0) {
-      unsat_clauses++;
+    if (true_lits == 0) {
+      add_false_clause(c_idx);
     }
+
+    l_to_clauses++;
   }
 
   // For each clause containing !l, set !l to true
+  int *not_l_to_clauses = literal_clauses[not_l_idx];
   for (int c = 0; c < not_occ; c++) {
-    int c_idx = not_l->clause_indexes[c];
-    clause_t *cl = &clauses[c_idx];
+    const int c_idx = *not_l_to_clauses;
 
     // Add literal to sat XOR mask
-    cl->sat_lits++;
-    cl->sat_mask ^= lit_idx;
+    clause_num_true_lits[c_idx]++;
+    const int true_lits = clause_num_true_lits[c_idx];
+    clause_lit_masks[c_idx] ^= not_l_idx;
 
-    // Clear markings of literals involved in the clause
-    if (cl->sat_lits <= 2) {
-      const int size = cl->size;
+    // Signal compute cost of literals involved in the clause
+    // TODO do all literals become critical?
+    if (true_lits <= 2) {
+      const int size = clause_sizes[c_idx];
+      int *c_to_lits = clause_literals[c_idx];
       for (int cl_lit = 0; cl_lit < size; cl_lit++) {
-        int l_idx = POS_LIT_IDX(cl->literals[cl_lit]);
-        literal_t *clause_literal = &literals[l_idx];
-        CLEAR_MARKING(clause_literal);
+        const int cl_var_idx = VAR_IDX(*c_to_lits);
+        add_cost_compute_var(cl_var_idx);
+        c_to_lits++;
       }
     }
 
-    if (cl->sat_lits == 1) {
-      unsat_clauses--;
+    if (true_lits == 1) {
+      remove_false_clause(c_idx);
     }
+
+    not_l_to_clauses++;
   }
 
   // Affect assignment bitvector
@@ -339,10 +496,10 @@ void flip_literal(int lit_idx) {
   // int bit = 1 << shift;
   // assignment[var_idx / BITS_IN_BYTE] ^= bit;
 
-  log_str("c There are %d remaining unsatisfied clauses\n", unsat_clauses);
+  log_str("c There are %d remaining unsatisfied clauses\n", num_unsat_clauses);
   if (get_verbosity() == VERBOSE) {
     log_assignment();
   }
 
-  flips++;
+  num_flips++;
 }

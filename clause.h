@@ -11,8 +11,6 @@
 #ifndef _CLAUSE_H_
 #define _CLAUSE_H_
 
-#include "ddfw_types.h"
-
 /** A cap on each clause length allows a finite buffer to be allocated at
  *  compile time to simplify the parsing process. See cnf_parser.c for how
  *  the buffer is used.
@@ -24,7 +22,7 @@
 /** @brief Default starting weight for each clause.
  *  TODO make it so this can be toggled with a command line argument.
  */
-#define DEFAULT_CLAUSE_WEIGHT (1.0)
+#define DEFAULT_CLAUSE_WEIGHT (100.0)
 
 /** @brief Takes a variable symbol from the DIMACS CNF input file and outputs
  *         an index into the literals array.
@@ -130,41 +128,56 @@
 /** Global variables for the single formula DDFW is solving. */
 // TODO does packaging into a struct so there is one extern too slow?
 
-
-/** @brief Marks a literal as a positive cost reducing literal.
- *
- *  @param l A pointer to a literal to mark.
- */
-#define MARK_RED_COST_POS(l)   ((l)->marking |= 0x1)
-
-#define IS_RED_COST_POS(l)     ((l)->marking & 0x1)
-
-#define MARK_RED_COST_ZERO(l)  ((l)->marking |= 0x2)
-
-#define IS_RED_COST_ZERO(l)    ((l)->marking & 0x2)
-
-#define CLEAR_MARKING(l)       ((l)->marking = 0)
-
 /** 
  *
  *  In order to facilitate fast DDFW solving, a CNF formula includes not just
  *  the literals and clauses involved, but also miscellaneous other structures
  *  that help amortize repeated helper function calls in the loop body.
  */
+// CNF information
 extern int num_vars;
 extern int num_literals;
 extern int num_clauses;
-extern int num_reducing_cost_lits;
-extern int num_zero_cost_lits;
-extern double max_reducing_cost;
-extern int flips;
-extern int unsat_clauses;
 
+// Statistics
+extern int num_restarts;
+extern int num_flips;
+extern double unsat_weight;
+
+// Formula information - 1-indexed (VAR_IDX indexed)
 extern char *assignment;
-extern literal_t *literals;
-extern clause_t *clauses;
-extern int *reducing_cost_lits;  // Indexes into literals array
 
+// Clause information - 0 indexed
+extern int *clause_sizes;
+extern double *clause_weights;
+extern int *clause_num_true_lits;
+extern int *clause_lit_masks;
+extern int **clause_literals; // Index by clause num, then by literal num
+
+// Literal information - use LIT_IDX
+extern int *literal_occ;
+extern int **literal_clauses; // Index by literal num, then by clause num
+
+// Bookkeeping structures
+// Membership struct for false clauses
+extern int *false_clause_members;
+extern int *false_clause_indexes;
+extern int num_unsat_clauses;
+
+// Membership struct for cost reducing literals
+extern int *cost_reducing_lits; // Make into vars?
+extern int *cost_reducing_idxs;
+extern int num_cost_reducing_lits;
+void add_cost_reducing_lit(int l_idx); // Helper
+
+// Membership struct for variables to compute cost reduction
+extern int *cost_compute_vars;
+extern int *cost_compute_idxs;
+extern int num_cost_compute_vars;
+void add_cost_compute_var(int v_idx);
+void remove_cost_compute_var(int v_idx); // Helper
+
+// Functions
 void initialize_formula(int num_cs, int num_vs);
 void initialize_clause(int clause_idx, int size, int *lit_idxs);
 void process_clauses();

@@ -12,8 +12,6 @@
 #ifndef _LOGGER_H_
 #define _LOGGER_H_
 
-#include "ddfw_types.h"
-
 /** @brief Defines the verbosity level for the algorithm.
  *
  *  A single verbosity level is maintained by the logger. Set the verbosity
@@ -45,6 +43,7 @@ void set_verbosity(verbose_t verbosity_level);
 void log_clause(int c_idx);
 void log_literal(int l_idx);
 void log_str(const char *format, ...);
+void log_err(const char *format, ...);
 
 /** Loop information */
 void log_weights();

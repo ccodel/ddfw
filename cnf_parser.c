@@ -16,8 +16,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#include "logger.h"
 #include "cnf_parser.h"
+#include "logger.h"
+#include "clause.h"
 
 /** A buffer for literal indices. Used to store the literals for each
  *  clause when parsing the CNF file.
@@ -71,7 +72,7 @@ void parse_cnf_file(char *filename) {
       if (var != 0) {
         // New literal for the clause - count occurrence, place into buffer
         int lit_idx = LIT_IDX(var);
-        literals[lit_idx].occurrences++;
+        literal_occ[lit_idx]++;
         clause_idx_buf[clause_size++] = lit_idx;
       } else {
         // Read in a 0, so we are done readig this clause
