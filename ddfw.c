@@ -124,6 +124,12 @@
 #define A   (0.75)
 #define C   (0.25)
 
+/** @brief Numerator to random walk if no cost reducing literals */
+#define DEFAULT_RANDOM_WALK_NUM              (15)
+
+/** @brief Denominator to random walk if no cost reducing literals */
+#define DEFAULT_RANDOM_WALK_DEN              (100)
+
 /** @brief The default probability that the maximum weight neighboring clause
  *         is disregarded for a random clause.
  *
@@ -362,34 +368,25 @@ static void run_algorithm() {
   int timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
   int seconds_at_start = time(NULL);
 
-  int lit_to_flip;
+  int var_to_flip;
   while (num_unsat_clauses > 0) {
-    // log_weights();
-    // TODO extreme reset
-    /*
-    for (int i = 1; i <= num_vars; i++) {
-      add_cost_compute_var(i);
-    }
-    */
-
     find_cost_reducing_literals();
     log_reducing_cost_lits();
     
     // See if any literals will reduce the weight
     // TODO no check against delta(W) = 0
     if (num_cost_reducing_vars > 0) {
-      unsigned int rand_lit = ((unsigned int) rand()) % num_cost_reducing_vars;
-      lit_to_flip = cost_reducing_vars[rand_lit];
-    }// else if (num_zero_cost_lits > 0) {
-      // TODO
-      //printf(stderr, "No weights\n");
-    //} 
-    else {
+      unsigned int rand_var = ((unsigned int) rand()) % num_cost_reducing_vars;
+      var_to_flip = cost_reducing_vars[rand_var];
+    } else if (((unsigned int) rand()) % DEFAULT_RANDOM_WALK_DEN <
+        DEFAULT_RANDOM_WALK_NUM) {
+      var_to_flip = ((unsigned int) rand()) % num_vars;
+    } else {
       distribute_weights();
       continue;
     }
 
-    flip_variable(lit_to_flip);
+    flip_variable(var_to_flip);
 
     // Determine if enough loops have passed to update time variable
     timeout_loop_counter--;
