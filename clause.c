@@ -32,11 +32,15 @@
 int num_vars = 0;
 int num_literals = 0;
 int num_clauses = 0;
+double init_clause_weight = DEFAULT_CLAUSE_WEIGHT;
+
+int stat_one = 0;
+int stat_two = 0;
 
 // Statistics
 int num_restarts = 0;
 int num_flips = 0;
-static int lowest_unsat_clauses = 0;
+int lowest_unsat_clauses = 0;
 
 // Formula information
 char *assignment = NULL;
@@ -249,7 +253,7 @@ void initialize_clause(int clause_idx, int size, int *lit_idxs) {
   // Note that clause_num_true_lits and clause_lit_masks will be set
   // when the assignment is randomized, and so do not need to be init. here
   clause_sizes[clause_idx] = size;
-  clause_weights[clause_idx] = DEFAULT_CLAUSE_WEIGHT;
+  clause_weights[clause_idx] = init_clause_weight;
   clause_literals[clause_idx] = malloc_memory(size * sizeof(int), "cl lits");
   memcpy(clause_literals[clause_idx], lit_idxs, size * sizeof(int));
 }
@@ -408,8 +412,6 @@ void flip_variable(const int var_idx) {
   const int not_lit_idx = NEGATED_IDX(pos_lit_idx);
   const int assigned = ASSIGNMENT(pos_lit_idx);
 
-  // log_str("c Flipping lit %d (var %d)\n", pos_lit_idx, var_idx);
-
   add_cost_compute_var(var_idx);
 
   // Determine which literal has the truth value, to flip correct clauses
@@ -430,14 +432,17 @@ void flip_variable(const int var_idx) {
   for (int c = 0; c < l_occ; c++) {
     const int c_idx = *l_to_clauses;
 
-    // Remove ltieral from sat XOR mask
+    // Remove literal from sat XOR mask
     clause_num_true_lits[c_idx]--;
     const int true_lits = clause_num_true_lits[c_idx];
     clause_lit_masks[c_idx] ^= pos_lit_idx;
 
-    // If the clause becomes critical, signal compute cost for lits in clause
-    // TODO do all literals become critical?
-    if (true_lits <= 1) {
+    // In the case where the clause now has 0 true literals,
+    //   all literals become critical, and may be added to cost compute
+    if (true_lits == 0) {
+      // Also, the clause is false, and may be added to that list
+      add_false_clause(c_idx);
+
       const int size = clause_sizes[c_idx];
       int *c_to_lits = clause_literals[c_idx];
       for (int cl_lit = 0; cl_lit < size; cl_lit++) {
@@ -445,10 +450,12 @@ void flip_variable(const int var_idx) {
         add_cost_compute_var(cl_var_idx); 
         c_to_lits++;
       }
-    }
-
-    if (true_lits == 0) {
-      add_false_clause(c_idx);
+    } else if (true_lits == 1) {
+      // If instead the clause has 1 true literal, only the last true
+      // literal is critical and can make the clause false if flipped
+      // Get the last true literal from the literal mask
+      const int mask_lit = clause_lit_masks[c_idx];
+      add_cost_compute_var(VAR_IDX(mask_lit));
     }
 
     l_to_clauses++;
@@ -462,11 +469,15 @@ void flip_variable(const int var_idx) {
     // Add literal to sat XOR mask
     clause_num_true_lits[c_idx]++;
     const int true_lits = clause_num_true_lits[c_idx];
+    const int mask_before = clause_lit_masks[c_idx]; // See else if case
     clause_lit_masks[c_idx] ^= not_l_idx;
 
-    // Signal compute cost of literals involved in the clause
-    // TODO do all literals become critical?
-    if (true_lits <= 2) {
+    // If the clause was just made true, then all literals may now reduce
+    //   cost less, and so must be re-computed
+    if (true_lits == 1) {
+      // Also, the clause is no longer false, and may be removed
+      remove_false_clause(c_idx);
+
       const int size = clause_sizes[c_idx];
       int *c_to_lits = clause_literals[c_idx];
       for (int cl_lit = 0; cl_lit < size; cl_lit++) {
@@ -474,10 +485,10 @@ void flip_variable(const int var_idx) {
         add_cost_compute_var(cl_var_idx);
         c_to_lits++;
       }
-    }
-
-    if (true_lits == 1) {
-      remove_false_clause(c_idx);
+    } else if (true_lits == 2) {
+      // If instead the literal is made "non-critical," only the other true
+      //   literal must be re-computed
+      add_cost_compute_var(VAR_IDX(mask_before));
     }
 
     not_l_to_clauses++;
@@ -485,16 +496,12 @@ void flip_variable(const int var_idx) {
 
   // Affect assignment bitvector
   assignment[var_idx] = !assignment[var_idx];
-  // int shift = var_idx & BYTE_MASK;
-  // int bit = 1 << shift;
-  // assignment[var_idx / BITS_IN_BYTE] ^= bit;
 
   if (get_verbosity() == VERBOSE) {
     log_assignment();
   }
 
   if (num_unsat_clauses < lowest_unsat_clauses) {
-    printf("c     RECORD AT %d\n", num_unsat_clauses);
     lowest_unsat_clauses = num_unsat_clauses;
   }
 

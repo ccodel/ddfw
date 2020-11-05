@@ -49,6 +49,7 @@ void log_err(const char *format, ...);
 void log_weights();
 void log_reducing_cost_lits();
 
+void log_statistics();
 
 void log_assignment();
 void output_assignment();

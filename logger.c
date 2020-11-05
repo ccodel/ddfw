@@ -58,13 +58,25 @@ static void unrecognized_verbosity_level() {
  */
 void print_help(char *runtime_path) {
   printf("\n%s: Divide and Distribute Fixed Weights\n\n", runtime_path);
+  printf("  -a <double>         Provide");
+  printf(" a multiplicative constant for weight distribution.\n");
+  printf("  -c <double>         Provide");
+  printf(" an additive constant for weight distribution.\n");
+  printf("  -A <double>         Provide");
+  printf(" a multiplicative constant for WD under W_init.\n");
+  printf("  -C <double>         Provide");
+  printf(" an additive constant for WD under W_init.\n");
+  printf("  -d                  Use DDFW original paper settings.\n");
   printf("  -f <filename>       Provide a .cnf file.\n");
   printf("  -h                  Display this help message.\n");
   printf("  -q                  Quiet mode, no printing.\n");
   printf("  -s <seed>           Provide an optional randomization seed.\n");
   printf("  -t <timeout>        Provide");
   printf(" an optional number of seconds until timeout.\n");
-  printf("  -v                  Turn on verbose printing.\n\n");
+  printf("  -v                  Turn on verbose printing.\n");
+  printf("  -w <double>         Initial weight for all clauses.\n");
+  printf("\n");
+
 }
 
 /** @brief Print usage information when the provided arguments aren't
@@ -78,8 +90,9 @@ void print_help(char *runtime_path) {
  *  @param runtime_path The string name of the running executable, e.g. ./ddfw
  */
 void print_usage(char *runtime_path) {
-  printf("Usage: %s [-hv] -f <filename> [-s <seed>] [-t <timeout>]\n", 
+  printf("Usage: %s [-hqv] -f <filename> [-s <seed>] [-t <timeout>]\n", 
       runtime_path);
+  printf("                [-w <double>] [-aAcC <double>]\n");
 }
 
 /** @brief Returns the logger's verbosity level.
@@ -229,8 +242,8 @@ void log_reducing_cost_lits() {
     int not_l_idx = NEGATED_IDX(l_idx);
     int assigned = ASSIGNMENT(l_idx);
 
-    //printf("c %d (var %d) is cost reducing, current truth value %d\n",
-    //    l_idx, VAR_IDX(l_idx), assigned);
+    printf("c %d (var %d) is cost reducing, current truth value %d\n",
+        l_idx, VAR_IDX(l_idx), assigned);
     if (vlevel == VERBOSE) {
       printf("c   Critical clauses for this literal:\n");
 
@@ -267,6 +280,16 @@ void log_reducing_cost_lits() {
   }
 }
 
+/** @brief Logs common statistics collected throughout the algorithm.
+ *  
+ *  Prints number of flips, time taken, best found so far.
+ */
+void log_statistics() {
+  printf("c Number of flips: %d\n", num_flips);
+  printf("c Best number of unsatisfied clauses found: %d\n", 
+      lowest_unsat_clauses);
+}
+
 /** @brief Logs the current assignment in the global formula variable.
  *
  *  The logged output prints the assignment in a grid 50 variables wide.
@@ -278,7 +301,7 @@ void log_assignment() {
       return;
     case VERBOSE:
       // Print out the top banner
-      printf("c Assign:   1        10        20        30        40\n");
+      printf("c Assign:   1   5    10   5    20   5    30   5    40\n");
       printf("c           --------------------------------------------------");
 
       char *a = assignment + 1;

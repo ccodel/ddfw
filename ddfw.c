@@ -60,7 +60,7 @@
  *  @author   Abdelraouf Ishtaiwi (a.ishtaiwi@giffith.edu.au)
  *  @author   John Thornton       (j.thornton@griffith.edu.au)
  *  @author   Abdul Sattar        (a.sattar@griffith.edu.au)
- *  @author Duc Nghia Pham        (d.n.pham@griffith.edu.au)
+ *  @author   Duc Nghia Pham      (d.n.pham@griffith.edu.au)
  *  
  *  ///////////////////////////////////////////////////////////////////////////
  *  // BUGS AND TODOS
@@ -86,15 +86,6 @@
 // CONFIGURATION MACROS
 ///////////////////////////////////////////////////////////////////////////////
 
-/** @brief The maximum number of command line arguments allowed.
- *
- *  While this number alone will not catch ill-formed command line arguments,
- *  if does provide a quick way to short-circuit in main().
- *
- *  UPDATE THIS NUMBER IF NEW COMMAND LINE ARGUMENTS ARE IMPLEMENTED.
- */
-#define MAX_CLI_ARGS  10
-
 /** Default number of seconds to loop before timing out. 
  *  Can be toggled with the -t <timeout_secs> flag at the command line.
  **/
@@ -106,23 +97,22 @@
  *  TODO maybe define this based on some computed runtime quantity? Make
  *       smaller based on number of clauses/literals?
  */
-#define DEFAULT_LOOPS_PER_TIMEOUT_CHECK   (100000)
+#define DEFAULT_LOOPS_PER_TIMEOUT_CHECK   (1000000)
 
 /** Default randomization seed. */
 #define DEFAULT_SEED                      (0xdeadd00d)
 
-/** The transfer weight equation is
+/** When transferring weights, weight is transferred from a clause cf to a
+ *  clause ct. If we let the weight of cf to be wf and the weight of ct to
+ *  be wt, then the weights of the two are adjusted according to:
  *
- *  clause_to weight += a (clause_from weight) + c
+ *    cf = a * cf + c
+ *    ct = cf - (a * cf + c)
  *
- *  where a is a multiplicative scalar and c a constant.
- *
- *  As the initial weight in the DDFW paper was 8, then we set
- *
- *  a = 0.75, c = 0.25
+ *  To more closely reflect the original paper, a is set to 1 and c is -2.
  */
-#define A   (0.75)
-#define C   (0.25)
+#define A   (1.0)
+#define C   (-2.0)
 
 /** @brief Numerator to random walk if no cost reducing literals */
 #define DEFAULT_RANDOM_WALK_NUM              (15)
@@ -136,8 +126,6 @@
  *  TODO configurable?
  */
 #define DEFAULT_RANDOM_CLAUSE_PROB          (0.01)
-
-// TODO versioning
 
 ///////////////////////////////////////////////////////////////////////////////
 // HELPER MACROS
@@ -162,9 +150,31 @@
 // STATIC GLOBAL VARIABLE DECLARATIONS
 ///////////////////////////////////////////////////////////////////////////////
 
-static int timeout_secs = DEFAULT_TIMEOUT_SECS;  // Seconds until timeout
+/** @brief Number of seconds before instance timeout.
+ *
+ *  Can be toggled with the -t <secs> flag when running the executable.
+ *  The amount of time elapsed is checked every DEFAULT_LOOPS_PER_TIMEOUT_CHECK 
+ *  loops of the main loop body.
+ */
+static int timeout_secs = DEFAULT_TIMEOUT_SECS;
 
+/** @brief The probability that, instead of transferring weight from the
+ *         maximum weighted neighbor, weight is transferred from a randomly
+ *         chosen satisfied neighboring clause.
+ */
 static int random_clause_prob = (int) (1.0 / DEFAULT_RANDOM_CLAUSE_PROB);
+
+/** @brief The multiplicative constant in weight transferral. */
+static double a = A;
+
+/** @brief The additive constant in weight transferral. */
+static double c = C;
+
+/** @brief The multiplicative constant when underneath w_init. */
+static double a_prime = A;
+
+/** @brief The additive constant when underneath w_init. */
+static double c_prime = C;
 
 ////////////////////////////////////////////////////////////////////////////////
 // DDFW algorithm implementation
@@ -178,14 +188,16 @@ static int random_clause_prob = (int) (1.0 / DEFAULT_RANDOM_CLAUSE_PROB);
  *  is to "find and return a list L of literals causing the greatest reduction
  *  in weighted cost delta(w) when flipped."
  *
- *  TODO CURRENTLY INEFFICIENT
- *  To do so, the literals are looped over. The change in weighted cost for
- *  literal l is defined as the cost lost minus the cost gained from making
- *  clauses unsatisfied.
+ *  While the list L could be computed by looping over every literal, every
+ *  loop, that would result in much redundant computation, as only those
+ *  literals involved in a clause with a flipped literal would have their
+ *  cost calculations change.
  *
- *  Let W(l) be the total weight of clauses with l or !l, sat or unsat.
- *  Then if delta(w) for l is W, delta(w) for !l is "break." TODO
- *
+ *  As a result, flipping literals causes literal indexes to be stored in 
+ *  cost_compute_vars, which acts as a sort of stack. This function pops
+ *  every variable index in the stack and re-computes its delta(w). If
+ *  delta(w) is strictly positive, the variable is added to the list
+ *  of cost reducing variables.
  */
 static void find_cost_reducing_literals() {
   // Loop through those variables in the cost_compute_vars to compute cost
@@ -265,27 +277,32 @@ static void find_cost_reducing_literals() {
  *  @param to_idx   The clause index that weight is given to.
  */
 static inline void transfer_weight(int from_idx, int to_idx) {
+  // Check if weight is under init_clause_weight
   double orig = clause_weights[from_idx];
-  clause_weights[from_idx] *= A;
-  clause_weights[from_idx] += C;
+
+  // Use prime version of variables if under init weight
+  if (orig < init_clause_weight) {
+    clause_weights[from_idx] *= a_prime;
+    clause_weights[from_idx] += c_prime;
+  } else {
+    clause_weights[from_idx] *= a;
+    clause_weights[from_idx] += c;
+  }
+
+  // Whatever weight was taken away is given to unsat clause
   double diff = orig - clause_weights[from_idx];
   clause_weights[to_idx] += diff;
 
-  const int from_size = clause_sizes[from_idx];
-  const int to_size = clause_sizes[to_idx];
-
-  // In the satisfied "from" clause, add vars to cost compute
-  //   only if the clause is "critical"
-  if (clause_num_true_lits[from_idx] <= 1) {
-    int *from_lits = clause_literals[from_idx];
-    for (int l = 0; l < from_size; l++) {
-      const int l_idx = *from_lits;
-      add_cost_compute_var(VAR_IDX(l_idx));
-      from_lits++;
-    }
+  // Assume the "from" clause is satisfied - then only the satisfied
+  //   literal inside must have its cost change re-computed
+  // assert(clause_num_true_lits[from_idx] > 0);
+  if (clause_num_true_lits[from_idx] == 1) {
+    const int mask_lit = clause_lit_masks[from_idx];
+    add_cost_compute_var(VAR_IDX(mask_lit));
   }
 
   // In the unsatisfied "to" clause, add vars to cost compute
+  const int to_size = clause_sizes[to_idx];
   int *to_lits = clause_literals[to_idx];
   for (int l = 0; l < to_size; l++) {
     const int l_idx = *to_lits;
@@ -366,7 +383,7 @@ static void run_algorithm() {
 
   // Record the time to ensure no timeout
   int timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
-  int seconds_at_start = time(NULL);
+  int start_secs = time(NULL);
 
   int var_to_flip;
   while (num_unsat_clauses > 0) {
@@ -391,24 +408,26 @@ static void run_algorithm() {
     // Determine if enough loops have passed to update time variable
     timeout_loop_counter--;
     if (timeout_loop_counter == 0) {
-      printf("c There are now %d unsat clauses after %d flips\n",
-          num_unsat_clauses, num_flips);
       timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
 
       // Check for timeout
-      if (time(NULL) - seconds_at_start >= timeout_secs)
+      if (time(NULL) - start_secs >= timeout_secs)
         break;
     }
   }
 
+  int end_secs = time(NULL);
+
   // Print solution
   if (num_unsat_clauses == 0) {
     output_assignment();
-    printf("\n\nc Satisfied in %ld seconds\n", time(NULL) - seconds_at_start);
+    printf("c Satisfied in %d seconds\n", end_secs - start_secs);
   } else {
     printf("s UNSATISFIABLE\n");
     printf("c Could not solve due to timeout.\n");
   }
+
+  log_statistics();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -421,17 +440,41 @@ static void run_algorithm() {
  *  @param argv The array of string arguments given on the command line.
  */
 int main(int argc, char *argv[]) {
-  if (argc == 1 || argc > MAX_CLI_ARGS) {
+  if (argc == 1) {
     print_usage(argv[0]);
     exit(1);
   }
-
+ 
   int seed = DEFAULT_SEED;
   char *filename = NULL;
   extern char *optarg;
   char opt;
-  while ((opt = getopt(argc, argv, "hvqf:s:t:")) != -1) {
+  while ((opt = getopt(argc, argv, "dhvqa:A:c:C:f:s:t:w:")) != -1) {
     switch (opt) { 
+      case 'a':
+        a = atof(optarg);
+        log_str("c Multiplicative scalar is %lf\n", a);
+        break;
+      case 'A':
+        a_prime = atof(optarg);
+        log_str("c Alternative multiplicative scalar is %lf\n", a_prime);
+        break;
+      case 'c':
+        c = atof(optarg);
+        log_str("c Additive constant is %lf\n", c);
+        break;
+      case 'C':
+        c_prime = atof(optarg);
+        log_str("c Alternative additive constant is %lf\n", c_prime);
+        break;
+      case 'd':
+        // Original DDFW paper settings
+        init_clause_weight = 8.0;
+        a = 1.0;
+        a_prime = 1.0;
+        c = -2.0;
+        c_prime = -1.0;
+        break;
       case 'f':
         filename = optarg;
         break;
@@ -444,7 +487,7 @@ int main(int argc, char *argv[]) {
       case 's':
         seed = atoi(optarg);
         if (seed != 0) {
-          log_str("c Using randomization seed %d", seed);
+          log_str("c Using randomization seed %d\n", seed);
           srand(seed);
         }
         break;
@@ -454,16 +497,20 @@ int main(int argc, char *argv[]) {
       case 'v':
         set_verbosity(VERBOSE);
         break;
+      case 'w':
+        init_clause_weight = atof(optarg);
+        log_str("c Default clause weight set to %lf\n", init_clause_weight);
+        break;
       default:
         print_usage(argv[0]);
     }
   }
 
-  printf("c ------------------------------------------------------------\n");
-  printf("c          DDFW - Divide and Distribute Fixed Weights\n");
-  printf("c                  Implemented by Cayden Codel\n");
-  printf("c                          Version 0.1\n");
-  printf("c ------------------------------------------------------------\n");
+  log_str("c ------------------------------------------------------------\n");
+  log_str("c          DDFW - Divide and Distribute Fixed Weights\n");
+  log_str("c                  Implemented by Cayden Codel\n");
+  log_str("c                          Version 0.1\n");
+  log_str("c ------------------------------------------------------------\n");
 
   if (filename == NULL) {
     fprintf(stderr, "c No filename provided, exiting.\n");
@@ -479,15 +526,6 @@ int main(int argc, char *argv[]) {
 
   log_str("c All done parsing CLI args, opening file %s\n", filename);
   parse_cnf_file(filename);
-
-  /*
-  // TODO remove when verify copy is good TODO calloc to array compare
-  reducing_cost_copy = calloc(num_literals, sizeof(int));
-  if (reducing_cost_copy == NULL) {
-    fprintf(stderr, "c Ran out of memory on copy, exiting\n");
-    exit(-1);
-  }
-  */
 
   run_algorithm();
 

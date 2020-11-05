@@ -3,7 +3,7 @@
 #
 
 CC = gcc
-CFLAGS = -g -O2 -Wall -Werror -Wno-unused-function -Wno-unused-parameter -std=c99
+CFLAGS = -g -O3 -Wall -Werror -Wno-unused-function -Wno-unused-parameter -std=c99
 
 FILES = ddfw.o clause.o logger.o cnf_parser.o
 
