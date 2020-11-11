@@ -18,7 +18,6 @@ void *xcalloc(size_t count, size_t size);
 void *xmalloc(size_t size);
 void *xrealloc(void *ptr, size_t size);
 void *xreallocf(void *ptr, size_t size);
-void *xvalloc(size_t size);
 
 void xfree(void *ptr); // Technically just calls free()
 

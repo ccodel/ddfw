@@ -87,18 +87,6 @@ void *xreallocf(void *ptr, size_t size) {
 }
 
 
-/** @brief Exit() wrapper around valloc().
- *
- *  @param size The size of the memory to allocate, in bytes.
- *  @return The result of valloc().
- */
-void *xvalloc(size_t size) {
-  void *ptr = valloc(size);
-  NULL_POINTER(ptr, "xvalloc");
-  return ptr;
-}
-
-
 /** @brief Wrapper for free().
  *
  *  No pointer checks are required, so just calls free().
