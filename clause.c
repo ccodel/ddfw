@@ -13,6 +13,7 @@
 
 #include "clause.h"
 #include "logger.h"
+#include "xmalloc.h"
 
 #include <stdio.h>
 
@@ -39,7 +40,7 @@ int stat_two = 0;
 
 // Statistics
 int num_restarts = 0;
-int num_flips = 0;
+long num_flips = 0;
 int lowest_unsat_clauses = 0;
 
 // Formula information
@@ -158,41 +159,6 @@ inline void remove_cost_compute_var(const int v_idx) {
   }
 }
 
-/** @brief Calls malloc() with an error printing wrapper.
- *
- *  Exits the process if not enough memory is available.
- *
- *  @param size    The size to allocate, in bytes.
- *  @param err_str The item being allocated, to print on allocation failure.
- */
-static void *malloc_memory(int size, char *err_str) {
-  void *ptr = malloc(size);
-  if (ptr == NULL) {
-    log_err("c Ran out of memory when allocating %s, exiting", err_str);
-    exit(-1);
-  }
-
-  return ptr;
-}
-
-/** @brief Calls calloc() with an error printing wrapper.
- *
- *  Exits the process if not enough memory is available.
- *
- *  @param elems   The number of elements to allocate.
- *  @param size    The size of each element, in bytes.
- *  @param err_str The item being allocated, to print on allocation failure.
- */
-static void *calloc_memory(int elems, int size, char *err_str) {
-  void *ptr = calloc(elems, size);
-  if (ptr == NULL) {
-    log_err("c Ran out of memory when allocating %s, exiting", err_str);
-    exit(-1);
-  }
-
-  return ptr;
-}
-
 
 /** @brief Initializes the global formula to get ready for the specified
  *         number of clauses and variables/literals. Allocates the necessary
@@ -214,29 +180,29 @@ void initialize_formula(int num_cs, int num_vs) {
       num_vars, num_clauses);
 
   // Allocate all global pointer structures
-  assignment = malloc_memory((num_vars + 1) * sizeof(char), "assignment");
+  assignment = xmalloc((num_vars + 1) * sizeof(char));
 
   // TODO which need to be calloced?
-  clause_sizes = malloc_memory(num_clauses * sizeof(int), "cl sizes");
-  clause_weights = malloc_memory(num_clauses * sizeof(double), "weights");
-  clause_num_true_lits =  malloc_memory(num_clauses * sizeof(int), "true lits");
-  clause_lit_masks = malloc_memory(num_clauses * sizeof(int), "lit masks");
-  clause_literals = calloc_memory(num_clauses, sizeof(int *), "cl lits");
+  clause_sizes = xmalloc(num_clauses * sizeof(int));
+  clause_weights = xmalloc(num_clauses * sizeof(double));
+  clause_num_true_lits =  xmalloc(num_clauses * sizeof(int));
+  clause_lit_masks = xmalloc(num_clauses * sizeof(int));
+  clause_literals = xcalloc(num_clauses, sizeof(int *));
 
-  literal_occ = calloc_memory(lit_arr, sizeof(int), "occurrences");
-  literal_clauses = calloc_memory(lit_arr, sizeof(int *), "lit cls");
+  literal_occ = xcalloc(lit_arr, sizeof(int));
+  literal_clauses = xcalloc(lit_arr, sizeof(int *));
 
-  false_clause_members = malloc_memory(num_clauses * sizeof(int), "false cls");
-  false_clause_indexes = malloc_memory(num_clauses * sizeof(int), "false ptrs");
-  memset(false_clause_indexes, -1, num_clauses * sizeof(int));
+  false_clause_members = xmalloc(num_clauses * sizeof(int));
+  false_clause_indexes = xmalloc(num_clauses * sizeof(int));
+  memset(false_clause_indexes, 0xff, num_clauses * sizeof(int));
   
-  cost_reducing_vars = malloc_memory(num_vars * sizeof(int), "cr vars");
-  cost_reducing_idxs = malloc_memory((num_vars + 1) * sizeof(int), "cr idxs");
-  memset(cost_reducing_idxs, -1, (num_vars + 1) * sizeof(int));
+  cost_reducing_vars = xmalloc(num_vars * sizeof(int));
+  cost_reducing_idxs = xmalloc((num_vars + 1) * sizeof(int));
+  memset(cost_reducing_idxs, 0xff, (num_vars + 1) * sizeof(int));
 
-  cost_compute_vars = malloc_memory(num_vars * sizeof(int), "cc vars");
-  cost_compute_idxs = malloc_memory((num_vars + 1) * sizeof(int), "cc idxs");
-  memset(cost_compute_idxs, -1, (num_vars + 1) * sizeof(int));
+  cost_compute_vars = xmalloc(num_vars * sizeof(int));
+  cost_compute_idxs = xmalloc((num_vars + 1) * sizeof(int));
+  memset(cost_compute_idxs, 0xff, (num_vars + 1) * sizeof(int));
   
   log_str("c Allocated memory successfully\n");
 }
@@ -254,7 +220,7 @@ void initialize_clause(int clause_idx, int size, int *lit_idxs) {
   // when the assignment is randomized, and so do not need to be init. here
   clause_sizes[clause_idx] = size;
   clause_weights[clause_idx] = init_clause_weight;
-  clause_literals[clause_idx] = malloc_memory(size * sizeof(int), "cl lits");
+  clause_literals[clause_idx] = xmalloc(size * sizeof(int));
   memcpy(clause_literals[clause_idx], lit_idxs, size * sizeof(int));
 }
 
@@ -272,7 +238,7 @@ void process_clauses() {
   int *sizes = clause_sizes;
   int **literals = clause_literals;
 
-  int *clause_counts = calloc_memory((num_literals + 2), sizeof(int), "inter");
+  int *clause_counts = xcalloc((num_literals + 2), sizeof(int));
 
   // Loop through the clauses to add clause index to each literal in the clause
   for (int c = 0; c < nc; c++) {
@@ -283,8 +249,7 @@ void process_clauses() {
     for (int l = 0; l < size; l++) {
       const int l_idx = *lits;
       if (literal_clauses[l_idx] == NULL) {
-        literal_clauses[l_idx] = malloc_memory(literal_occ[l_idx] * sizeof(int),
-            "Clause indexes");
+        literal_clauses[l_idx] = xmalloc(literal_occ[l_idx] * sizeof(int));
       }
 
       literal_clauses[l_idx][clause_counts[l_idx]] = c;
@@ -502,6 +467,8 @@ void flip_variable(const int var_idx) {
   }
 
   if (num_unsat_clauses < lowest_unsat_clauses) {
+    log_str("c Record %d after %d flips\n", 
+        num_unsat_clauses, num_flips);
     lowest_unsat_clauses = num_unsat_clauses;
   }
 

@@ -145,7 +145,7 @@ extern int stat_two;
 
 // Statistics
 extern int num_restarts;
-extern int num_flips;
+extern long num_flips;
 extern int lowest_unsat_clauses;
 
 // Formula information - 1-indexed (VAR_IDX indexed)

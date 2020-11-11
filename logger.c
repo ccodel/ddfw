@@ -237,6 +237,7 @@ void log_reducing_cost_lits() {
 
   // printf("c Found %d cost reducing literals\n", num_cost_reducing_vars);
 
+  /*
   for (int i = 0; i < num_cost_reducing_vars; i++) {
     int l_idx = LIT_IDX(cost_reducing_vars[i]);
     int not_l_idx = NEGATED_IDX(l_idx);
@@ -278,6 +279,7 @@ void log_reducing_cost_lits() {
       }
     }
   }
+  */
 }
 
 /** @brief Logs common statistics collected throughout the algorithm.
@@ -285,7 +287,7 @@ void log_reducing_cost_lits() {
  *  Prints number of flips, time taken, best found so far.
  */
 void log_statistics() {
-  printf("c Number of flips: %d\n", num_flips);
+  printf("c Number of flips: %ld\n", num_flips);
   printf("c Best number of unsatisfied clauses found: %d\n", 
       lowest_unsat_clauses);
 }
@@ -314,8 +316,10 @@ void log_assignment() {
         printf("%d", bit);
         a++;
       }
+      printf("\n");
     case NORMAL:
-      printf("\nThere are %d unsatisfied clauses\n", num_unsat_clauses);
+      printf("c There are %d unsatisfied clauses after %ld flips\n", 
+          num_unsat_clauses, num_flips);
       break;
     default:
       unrecognized_verbosity_level();

@@ -81,6 +81,7 @@
 #include "clause.h"
 #include "cnf_parser.h"
 #include "logger.h"
+#include "xmalloc.h"
 
 ///////////////////////////////////////////////////////////////////////////////
 // CONFIGURATION MACROS
@@ -176,9 +177,95 @@ static double a_prime = A;
 /** @brief The additive constant when underneath w_init. */
 static double c_prime = C;
 
+#ifdef DEBUG
+static int *cost_reducing_idxs_copy = NULL;
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////
 // DDFW algorithm implementation
 ////////////////////////////////////////////////////////////////////////////////
+
+#ifdef DEBUG
+/** @brief Verifies the computed cost reducing vars by looping over all
+ *         variables, instead of taking "cost_compute_vars" at its word.
+ */
+static void verify_cost_reducing_vars() {
+  // First step, copy over the cost reducing indexes array to compare later
+  memcpy(cost_reducing_idxs_copy, cost_reducing_idxs, 
+      (num_vars + 1) * sizeof(int));
+  memset(cost_reducing_idxs, 0xff, (num_vars + 1) * sizeof(int));
+
+  // Next, clear number of cost reducing vars and loop through all vars
+  // TODO this is just copied from below, pull out into helper function?
+  const int prev_num_cost_reducing = num_cost_reducing_vars;
+  num_cost_reducing_vars = 0;
+  for (int v_idx = 1; v_idx <= num_vars; v_idx++) {
+    const int l_idx = LIT_IDX(v_idx);
+    const int assigned = ASSIGNMENT(l_idx);
+    double satisfied_weight = 0.0;
+    double unsatisfied_weight = 0.0;
+
+    // Determine the index of the true literal
+    int true_idx, false_idx;
+    if (assigned) {
+      true_idx = l_idx;
+      false_idx = NEGATED_IDX(l_idx);
+    } else {
+      true_idx = NEGATED_IDX(l_idx);
+      false_idx = l_idx;
+    }
+
+    const int true_occ = literal_occ[true_idx];
+    const int false_occ = literal_occ[false_idx];
+
+    // Loop over satisfied clauses containing the true literal
+    int *l_to_clauses = literal_clauses[true_idx];
+    for (int c = 0; c < true_occ; c++) {
+      const int c_idx = *l_to_clauses;
+      if (clause_num_true_lits[c_idx] == 1) {
+        unsatisfied_weight += clause_weights[c_idx];
+      }
+
+      l_to_clauses++;
+    }
+
+    // Loop over unsatisfied clauses containing the false literal
+    l_to_clauses = literal_clauses[false_idx];
+    for (int c = 0; c < false_occ; c++) {
+      const int c_idx = *l_to_clauses;
+      if (clause_num_true_lits[c_idx] == 0) {
+        satisfied_weight += clause_weights[c_idx];
+      }
+
+      l_to_clauses++;
+    }
+
+    // Determine if flipping the truth value of the true literal
+    //   would result in more satisfied weight than unsatisfied weight
+    const double diff = satisfied_weight - unsatisfied_weight;
+    if (diff > 0.0) {
+      add_cost_reducing_var(v_idx);
+    } else if (diff <= 0.0) {
+      remove_cost_reducing_var(v_idx);
+    }
+  }
+
+  // Now compare the two indexes array
+  if (prev_num_cost_reducing != num_cost_reducing_vars) {
+    printf("Number of cost reducing variables not the same, prev %d, now %d\n",
+        prev_num_cost_reducing, num_cost_reducing_vars);
+    exit(-1);
+  }
+
+  for (int i = 1; i <= num_vars; i++) {
+    if ((cost_reducing_idxs[i] == -1 && cost_reducing_idxs_copy[i] != -1) ||
+        (cost_reducing_idxs[i] != -1 && cost_reducing_idxs_copy[i] == -1)) {
+      printf("Arrays differed at var %d\n", i);
+      exit(-1);
+    }
+  }
+}
+#endif
 
 /** @brief Finds those literals that cause a positive change in weighted
  *         cost if flipped and stores them in reducing_cost_lits.
@@ -262,6 +349,10 @@ static void find_cost_reducing_literals() {
     remove_cost_compute_var(v_idx);
     cc_vars--;
   }
+
+#ifdef DEBUG
+  verify_cost_reducing_vars();
+#endif
 }
 
 /** @brief Transfers weight from one clause to another in the distribute step.
@@ -322,8 +413,6 @@ static inline void transfer_weight(int from_idx, int to_idx) {
  *
  */
 static void distribute_weights() {
-  log_str("c Distributing weights\n");
-
   // Loop over all clauses, picking out those that are false
   const int uc = num_unsat_clauses;
   int *false_clauses = false_clause_members;
@@ -331,6 +420,7 @@ static void distribute_weights() {
     const int c_idx = *false_clauses;
     const int size = clause_sizes[c_idx];
 
+    // Scan for any neighboring clause that is satisfied and has max weight
     int max_neighbor_idx = -1;
     double max_neighbor_weight = -1.0;
 
@@ -350,26 +440,35 @@ static void distribute_weights() {
           max_neighbor_weight = clause_weights[cn_idx];
         }
 
+        // Move to the next clause index for this literal
         l_clauses++;
       }
 
-      if (max_neighbor_idx != -1) {
-        if (rand() % random_clause_prob != 0) {
-          transfer_weight(max_neighbor_idx, c_idx);
-        } else {
-          // Loop over clauses randomly until satisfied, good weight clause
-          unsigned int r_idx;
-          do {
-            r_idx = ((unsigned int) rand()) % occ;
-          } while (clause_num_true_lits[r_idx] == 0); // TODO weight case
-
-          transfer_weight(r_idx, c_idx);
-        }
-      }
-
+      // Move to the next literal in this clause
       cl_lits++;
     }
 
+    // If a maximum weight neighbor has been found for this clause
+    if (max_neighbor_idx != -1) {
+      // Transfer weight with almost 1 probability
+      if (rand() % random_clause_prob != 0) {
+        transfer_weight(max_neighbor_idx, c_idx);
+      } else {
+        // Select random satisfied clause instead by choosing random indexes
+        // NOTE: This was not mentioned in the original paper, but instead
+        // found in the original code by the authors. The form it takes in
+        // the UBCSAT code is to take any random clause, rather than a
+        // neighboring same-sign clause. Potential TODO
+        unsigned int r_idx;
+        do {
+          r_idx = ((unsigned int) rand()) % num_clauses;
+        } while (clause_num_true_lits[r_idx] == 0); // TODO weight case
+
+        transfer_weight(r_idx, c_idx);
+      }
+    }
+
+    // Move to the next false clause in the array
     false_clauses++;
   }
 }
@@ -384,6 +483,7 @@ static void run_algorithm() {
   // Record the time to ensure no timeout
   int timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
   int start_secs = time(NULL);
+  int end_secs;
 
   int var_to_flip;
   while (num_unsat_clauses > 0) {
@@ -409,14 +509,16 @@ static void run_algorithm() {
     timeout_loop_counter--;
     if (timeout_loop_counter == 0) {
       timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
+      end_secs = time(NULL);
+
+      log_str("c There are %d unsatisfied clauses after %d flips\n", 
+          num_unsat_clauses, num_flips);
 
       // Check for timeout
-      if (time(NULL) - start_secs >= timeout_secs)
+      if (end_secs - start_secs >= timeout_secs)
         break;
     }
   }
-
-  int end_secs = time(NULL);
 
   // Print solution
   if (num_unsat_clauses == 0) {
@@ -493,6 +595,7 @@ int main(int argc, char *argv[]) {
         break;
       case 't':
         timeout_secs = atoi(optarg);
+        log_str("c Timeout set to %d\n", timeout_secs);
         break;
       case 'v':
         set_verbosity(VERBOSE);
@@ -526,6 +629,10 @@ int main(int argc, char *argv[]) {
 
   log_str("c All done parsing CLI args, opening file %s\n", filename);
   parse_cnf_file(filename);
+
+#ifdef DEBUG
+  cost_reducing_idxs_copy = xmalloc((num_vars + 1) * sizeof(int));
+#endif
 
   run_algorithm();
 
