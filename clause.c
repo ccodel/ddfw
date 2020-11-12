@@ -39,6 +39,7 @@ double init_clause_weight = DEFAULT_CLAUSE_WEIGHT;
 int num_restarts = 1;
 long num_flips = 0;
 int lowest_unsat_clauses = 0;
+int lowest_unsat_step = 0;
 
 // Formula information
 char *assignment = NULL;
@@ -77,6 +78,8 @@ int num_unsat_clauses = 0;
  */
 int *cost_reducing_vars = NULL;
 int *cost_reducing_idxs = NULL;
+double *cost_reducing_weights = NULL;
+double total_cost_reducing_weight = 0.0;
 int num_cost_reducing_vars = 0;
 
 int *cost_compute_vars = NULL;
@@ -108,10 +111,12 @@ static inline void remove_false_clause(int c_idx) {
   }
 }
 
-inline void add_cost_reducing_var(const int v_idx) {
+inline void add_cost_reducing_var(const int v_idx, const double w) {
   if (cost_reducing_idxs[v_idx] == -1) {
     cost_reducing_idxs[v_idx] = num_cost_reducing_vars;
     cost_reducing_vars[num_cost_reducing_vars] = v_idx;
+    cost_reducing_weights[num_cost_reducing_vars] = w;
+    total_cost_reducing_weight += w;
     num_cost_reducing_vars++;
   }
 }
@@ -120,11 +125,14 @@ inline void remove_cost_reducing_var(const int v_idx) {
   const int idx = cost_reducing_idxs[v_idx];
   if (idx != -1) {
     num_cost_reducing_vars--;
+    total_cost_reducing_weight -= cost_reducing_weights[v_idx];
 
     // If idx is not at the end, swap the end with this index
     if (idx != num_cost_reducing_vars) {
       const int end_lit = cost_reducing_vars[num_cost_reducing_vars];
+      const double w = cost_reducing_weights[num_cost_reducing_vars];
       cost_reducing_vars[idx] = end_lit;
+      cost_reducing_weights[idx] = w;
       cost_reducing_idxs[end_lit] = idx;
     }
 
@@ -195,6 +203,7 @@ void initialize_formula(int num_cs, int num_vs) {
   
   cost_reducing_vars = xmalloc(num_vars * sizeof(int));
   cost_reducing_idxs = xmalloc((num_vars + 1) * sizeof(int));
+  cost_reducing_weights = xmalloc(num_vars * sizeof(double));
   memset(cost_reducing_idxs, 0xff, (num_vars + 1) * sizeof(int));
 
   cost_compute_vars = xmalloc(num_vars * sizeof(int));
@@ -271,7 +280,8 @@ void process_clauses() {
  */
 void reset_data_structures() {
   num_flips = 0;
-  lowest_unsat_clauses = 0;
+  lowest_unsat_clauses = num_clauses;
+  lowest_unsat_step = 0;
   
   num_unsat_clauses = 0;
   memset(false_clause_indexes, 0xff, num_clauses * sizeof(int));
@@ -493,6 +503,7 @@ void flip_variable(const int var_idx) {
     log_str("c Record %d after %d flips\n", 
         num_unsat_clauses, num_flips);
     lowest_unsat_clauses = num_unsat_clauses;
+    lowest_unsat_step = num_flips;
   }
 
   num_flips++;

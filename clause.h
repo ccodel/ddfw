@@ -144,6 +144,7 @@ extern double init_clause_weight;
 extern int num_restarts;
 extern long num_flips;
 extern int lowest_unsat_clauses;
+extern int lowest_unsat_step;
 
 // Formula information - 1-indexed (VAR_IDX indexed)
 extern char *assignment;
@@ -168,8 +169,10 @@ extern int num_unsat_clauses;
 // Membership struct for cost reducing variables
 extern int *cost_reducing_vars;
 extern int *cost_reducing_idxs;
+extern double *cost_reducing_weights;
 extern int num_cost_reducing_vars;
-void add_cost_reducing_var(const int v_idx); // Helper
+extern double total_cost_reducing_weight;
+void add_cost_reducing_var(const int v_idx, const double w); // Helper
 void remove_cost_reducing_var(const int v_idx); // Helper
 
 // Membership struct for variables to compute cost reduction

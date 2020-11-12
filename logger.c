@@ -288,11 +288,16 @@ void log_reducing_cost_lits() {
 /** @brief Logs common statistics collected throughout the algorithm.
  *  
  *  Prints number of flips, time taken, best found so far.
+ *
+ *  Prints 
  */
-void log_statistics() {
-  printf("c Number of flips: %ld\n", num_flips);
-  printf("c Best number of unsatisfied clauses found: %d\n", 
-      lowest_unsat_clauses);
+void log_statistics(int run, struct timeval *start, struct timeval *stop) {
+  // run | Solved? | flips | best | best_step | time
+  printf("c Stats: %d | %d | %ld | %d | %d | %.3f\n",
+      run, (num_unsat_clauses == 0), num_flips, lowest_unsat_clauses,
+      lowest_unsat_step,
+      ((double) (stop->tv_usec - start->tv_usec) / 1000000) + 
+      ((double) (stop->tv_sec - start->tv_sec)));
 }
 
 /** @brief Logs the current assignment in the global formula variable.
@@ -335,24 +340,27 @@ void log_assignment() {
  *  TODO better formatting later
  */
 void output_assignment() {
-  printf("s SATISFIABLE\nv ");
+  if (num_unsat_clauses != 0) {
+    printf("s UNSATISFIABLE\n");
+  } else {
+    printf("s SATISFIABLE\nv ");
+    char *a = assignment + 1;
+    for (int i = 1; i <= num_vars; i++) {
+      char bit = *a;
+      a++;
 
-  char *a = assignment + 1;
-  for (int i = 1; i <= num_vars; i++) {
-    char bit = *a;
-    a++;
+      if (bit == 0) {
+        printf("-%d ", i);
+      } else {
+        printf("%d ", i);
+      }
 
-    if (bit == 0) {
-      printf("-%d ", i);
-    } else {
-      printf("%d ", i);
+      // Newline character for formatting
+      if (i % 10 == 0) {
+        printf("\nv ");
+      }
     }
 
-    // Newline character for formatting
-    if (i % 15 == 0) {
-      printf("\nv ");
-    }
+    printf("0\n");
   }
-
-  printf("0\n");
 }

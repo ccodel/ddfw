@@ -19,6 +19,10 @@
  *  
  *  TODO Implementation discussion here.
  *
+ *  Potential improvement according to
+ *
+ *   https://www.keithschwarz.com/darts-dice-coins/
+ *
  *  ///////////////////////////////////////////////////////////////////////////
  *  // QUIRKY IMPLEMENTATION DETAILS
  *  ///////////////////////////////////////////////////////////////////////////
@@ -77,6 +81,7 @@
 #include <limits.h>
 #include <getopt.h>
 #include <time.h>
+#include <float.h>
 
 #include "clause.h"
 #include "cnf_parser.h"
@@ -158,12 +163,28 @@ typedef enum timeout_method {
   TIME, FLIPS
 } timeout_method_t;
 
+/** @brief Defines the selection method for the flipped variable.
+ *
+ *  UNIFORM is a uniform distribution across the candidate variables.
+ *  WEIGHTED is a weighted probability distribution according to weights.
+ *  BEST is the best weighted variable.
+ */
+typedef enum variable_selection_method {
+  UNIFORM, WEIGHTED, BEST
+} selection_method_t;
+
 ///////////////////////////////////////////////////////////////////////////////
 // STATIC GLOBAL VARIABLE DECLARATIONS
 ///////////////////////////////////////////////////////////////////////////////
 
+/** @brief What run number the program is on. */
+static int runs;
+
 /** @brief Timeout method. By default, times out by time. */
 static timeout_method_t timeout_method = TIME;
+
+/** @brief Variable selection method. By default, weighted probabilities. */
+static selection_method_t selection_method = WEIGHTED;
 
 /** @brief Number of seconds before instance timeout.
  *
@@ -264,7 +285,7 @@ static void verify_cost_reducing_vars() {
     //   would result in more satisfied weight than unsatisfied weight
     const double diff = satisfied_weight - unsatisfied_weight;
     if (diff > 0.0) {
-      add_cost_reducing_var(v_idx);
+      add_cost_reducing_var(v_idx, diff);
     } else if (diff <= 0.0) {
       remove_cost_reducing_var(v_idx);
     }
@@ -360,7 +381,7 @@ static void find_cost_reducing_literals() {
     const double diff = satisfied_weight - unsatisfied_weight;
     // log_str(" diff %.4f\n", diff);
     if (diff > 0.0) {
-      add_cost_reducing_var(v_idx); // Filter out 0 cost variables?
+      add_cost_reducing_var(v_idx, diff); // Filter out 0 cost variables?
     } else if (diff <= 0.0) {
       remove_cost_reducing_var(v_idx);
     }
@@ -502,18 +523,57 @@ static void run_algorithm() {
 
   // Record the time to ensure no timeout
   int timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
-  int start_secs = time(NULL);
-  int end_secs = time(NULL);
+  struct timeval start_time, stop_time;
+
+  gettimeofday(&start_time, NULL);
 
   int var_to_flip;
   while (num_unsat_clauses > 0) {
     find_cost_reducing_literals();
-    // log_reducing_cost_lits();
     
     // See if any literals will reduce the weight
-    // TODO no check against delta(W) = 0
     if (num_cost_reducing_vars > 0) {
-      unsigned int rand_var = ((unsigned int) rand()) % num_cost_reducing_vars;
+      unsigned int rand_var = 0;
+      switch (selection_method) {
+        case UNIFORM:
+          rand_var = ((unsigned int) rand()) % num_cost_reducing_vars;
+          break;
+        case WEIGHTED:;
+          double total_so_far = 0.0;
+          double rand_double = ABS(((double) rand()) 
+              / ((double) RAND_MAX) * total_cost_reducing_weight);
+          double *ws = cost_reducing_weights;
+
+          // Loop through the weights until found total greater than rand_d
+          for (int i = 0; i < num_cost_reducing_vars; i++) {
+            total_so_far += *ws;
+            if (rand_double <= total_so_far) {
+              rand_var = i;
+              break;
+            }
+
+            ws++;
+          }
+          break;
+        case BEST:;
+          double best_weight = DBL_MAX;
+          int best_idx = 0;
+          ws = cost_reducing_weights;
+          for (int i = 0; i < num_cost_reducing_vars; i++) {
+            const double w = *ws;
+            if (w < best_weight) {
+              best_weight = w;
+              best_idx = i;
+            }
+          }
+
+          rand_var = best_idx;
+          break;
+        default:
+          fprintf(stderr, "Unrecognized selection method\n");
+          exit(-1);
+      }
+
       var_to_flip = cost_reducing_vars[rand_var];
     } else if (((unsigned int) rand()) % DEFAULT_RANDOM_WALK_DEN <
         DEFAULT_RANDOM_WALK_NUM) {
@@ -527,38 +587,28 @@ static void run_algorithm() {
 
     // Determine if enough flips/loops have passed to update time variable
     if (timeout_method == FLIPS && num_flips >= timeout_flips) {
-      end_secs = time(NULL);
       break;
     } else {
       timeout_loop_counter--;
       if (timeout_loop_counter == 0) {
         timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
-        end_secs = time(NULL);
+        gettimeofday(&stop_time, NULL);
 
-        log_str("c There are %d unsatisfied clauses after %d flips\n", 
+        log_str("c %d unsatisfied clauses after %d flips\n", 
             num_unsat_clauses, num_flips);
 
         // Check for timeout
-        if (end_secs - start_secs >= timeout_secs)
+        if (stop_time.tv_sec - start_time.tv_sec >= timeout_secs)
           break;
       }
     }
   }
 
-  // Print solution
-  if (num_unsat_clauses == 0) {
-    output_assignment();
-    printf("c Satisfied in %d seconds\n", end_secs - start_secs);
-  } else {
-    printf("s UNSATISFIABLE\n");
-    if (timeout_method == TIME) {
-      printf("c Could not solve due to timeout (TIME).\n");
-    } else if (timeout_method == FLIPS) {
-      printf("c Could not solve due to timeout (FLIPS).\n");
-    }
-  }
+  gettimeofday(&stop_time, NULL);
 
-  log_statistics();
+  // Print solution
+  output_assignment();
+  log_statistics(runs, &start_time, &stop_time);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -580,7 +630,7 @@ int main(int argc, char *argv[]) {
   char *filename = NULL;
   extern char *optarg;
   char opt;
-  while ((opt = getopt(argc, argv, "dhvqa:A:c:C:f:r:s:t:T:w:")) != -1) {
+  while ((opt = getopt(argc, argv, "dhvqa:A:c:C:f:m:r:s:t:T:w:")) != -1) {
     switch (opt) { 
       case 'a':
         a = atof(optarg);
@@ -612,6 +662,26 @@ int main(int argc, char *argv[]) {
       case 'h':
         print_help(argv[0]);
         return 0;
+      case 'm':
+        switch (optarg[0]) {
+          case 'U':
+            selection_method = UNIFORM;
+            log_str("c Selection method is uniform distribution\n");
+            break;
+          case 'W':
+            selection_method = WEIGHTED;
+            log_str("c Selection method is weighted distribution\n");
+            break;
+          case 'B':
+            selection_method = BEST;
+            log_str("c Selection method is best\n");
+            break;
+          default:
+            selection_method = WEIGHTED;
+            log_str("c Unrecognized selection method, default is weighted\n");
+            break;
+        }
+        break;
       case 'q':
         set_verbosity(SILENT);
         break;
@@ -658,7 +728,24 @@ int main(int argc, char *argv[]) {
     exit(1);
   }
 
-  log_str("c Running with timeout of %d seconds\n", timeout_secs);
+  if (timeout_method == TIME) {
+    log_str("c Running with timeout of %d seconds\n", timeout_secs);
+  } else {
+    log_str("c Running with timeout of %d flips\n", timeout_flips);
+  }
+
+  switch (selection_method) {
+    case BEST:
+      log_str("c Running with selection method BEST\n");
+      break;
+    case UNIFORM:
+      log_str("c Running with selection method UNIFORM\n");
+      break;
+    case WEIGHTED:
+    default:
+      log_str("c Running with selection method WEIGHTED\n");
+      break;
+  }
 
   if (seed == DEFAULT_SEED) {
     log_str("c Using default randomization seed %d\n", seed);
@@ -672,7 +759,7 @@ int main(int argc, char *argv[]) {
   cost_reducing_idxs_copy = xmalloc((num_vars + 1) * sizeof(int));
 #endif
 
-  for (int runs = 0; runs < num_restarts; runs++) {
+  for (runs = 1; runs <= num_restarts; runs++) {
     run_algorithm();
     reset_data_structures();
   }

@@ -12,6 +12,8 @@
 #ifndef _LOGGER_H_
 #define _LOGGER_H_
 
+#include <sys/time.h>
+
 /** @brief Defines the verbosity level for the algorithm.
  *
  *  A single verbosity level is maintained by the logger. Set the verbosity
@@ -49,7 +51,7 @@ void log_err(const char *format, ...);
 void log_weights();
 void log_reducing_cost_lits();
 
-void log_statistics();
+void log_statistics(int run, struct timeval *start, struct timeval *stop);
 
 void log_assignment();
 void output_assignment();
