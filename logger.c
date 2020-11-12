@@ -70,9 +70,12 @@ void print_help(char *runtime_path) {
   printf("  -f <filename>       Provide a .cnf file.\n");
   printf("  -h                  Display this help message.\n");
   printf("  -q                  Quiet mode, no printing.\n");
+  printf("  -r <runs>           Provide an optional number of runs\n");
   printf("  -s <seed>           Provide an optional randomization seed.\n");
   printf("  -t <timeout>        Provide");
   printf(" an optional number of seconds until timeout.\n");
+  printf("  -T <flips>          Provide");
+  printf(" an optional number of flips until timeout.\n");
   printf("  -v                  Turn on verbose printing.\n");
   printf("  -w <double>         Initial weight for all clauses.\n");
   printf("\n");

@@ -92,6 +92,9 @@
  **/
 #define DEFAULT_TIMEOUT_SECS              (100)
 
+/** Default number of flips before timing out. */
+#define DEFAULT_TIMEOUT_FLIPS             1000000
+
 /** Default number of times a loop body is run before the number of elapsed
  *  seconds is checked. Not currently configurable.
  *
@@ -147,9 +150,20 @@
 #define MAX(x, y)  (((x) > (y)) ? (x) : (y))
 #endif
 
+
+/** @brief Defines whether the algorithm will timeout due to time or
+ *         number flips.
+ */
+typedef enum timeout_method {
+  TIME, FLIPS
+} timeout_method_t;
+
 ///////////////////////////////////////////////////////////////////////////////
 // STATIC GLOBAL VARIABLE DECLARATIONS
 ///////////////////////////////////////////////////////////////////////////////
+
+/** @brief Timeout method. By default, times out by time. */
+static timeout_method_t timeout_method = TIME;
 
 /** @brief Number of seconds before instance timeout.
  *
@@ -158,6 +172,12 @@
  *  loops of the main loop body.
  */
 static int timeout_secs = DEFAULT_TIMEOUT_SECS;
+
+/** @brief Number of flips before instance timeout.
+ *
+ *  Can be toggled with the -T <flips> flag when running the executable.
+ */
+static int timeout_flips = -1;
 
 /** @brief The probability that, instead of transferring weight from the
  *         maximum weighted neighbor, weight is transferred from a randomly
@@ -483,12 +503,12 @@ static void run_algorithm() {
   // Record the time to ensure no timeout
   int timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
   int start_secs = time(NULL);
-  int end_secs;
+  int end_secs = time(NULL);
 
   int var_to_flip;
   while (num_unsat_clauses > 0) {
     find_cost_reducing_literals();
-    log_reducing_cost_lits();
+    // log_reducing_cost_lits();
     
     // See if any literals will reduce the weight
     // TODO no check against delta(W) = 0
@@ -505,18 +525,23 @@ static void run_algorithm() {
 
     flip_variable(var_to_flip);
 
-    // Determine if enough loops have passed to update time variable
-    timeout_loop_counter--;
-    if (timeout_loop_counter == 0) {
-      timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
+    // Determine if enough flips/loops have passed to update time variable
+    if (timeout_method == FLIPS && num_flips >= timeout_flips) {
       end_secs = time(NULL);
+      break;
+    } else {
+      timeout_loop_counter--;
+      if (timeout_loop_counter == 0) {
+        timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
+        end_secs = time(NULL);
 
-      log_str("c There are %d unsatisfied clauses after %d flips\n", 
-          num_unsat_clauses, num_flips);
+        log_str("c There are %d unsatisfied clauses after %d flips\n", 
+            num_unsat_clauses, num_flips);
 
-      // Check for timeout
-      if (end_secs - start_secs >= timeout_secs)
-        break;
+        // Check for timeout
+        if (end_secs - start_secs >= timeout_secs)
+          break;
+      }
     }
   }
 
@@ -526,7 +551,11 @@ static void run_algorithm() {
     printf("c Satisfied in %d seconds\n", end_secs - start_secs);
   } else {
     printf("s UNSATISFIABLE\n");
-    printf("c Could not solve due to timeout.\n");
+    if (timeout_method == TIME) {
+      printf("c Could not solve due to timeout (TIME).\n");
+    } else if (timeout_method == FLIPS) {
+      printf("c Could not solve due to timeout (FLIPS).\n");
+    }
   }
 
   log_statistics();
@@ -551,7 +580,7 @@ int main(int argc, char *argv[]) {
   char *filename = NULL;
   extern char *optarg;
   char opt;
-  while ((opt = getopt(argc, argv, "dhvqa:A:c:C:f:s:t:w:")) != -1) {
+  while ((opt = getopt(argc, argv, "dhvqa:A:c:C:f:r:s:t:T:w:")) != -1) {
     switch (opt) { 
       case 'a':
         a = atof(optarg);
@@ -586,6 +615,10 @@ int main(int argc, char *argv[]) {
       case 'q':
         set_verbosity(SILENT);
         break;
+      case 'r':
+        num_restarts = atoi(optarg);
+        log_str("c Will run the algorithm %d times\n", num_restarts);
+        break;
       case 's':
         seed = atoi(optarg);
         if (seed != 0) {
@@ -596,6 +629,11 @@ int main(int argc, char *argv[]) {
       case 't':
         timeout_secs = atoi(optarg);
         log_str("c Timeout set to %d\n", timeout_secs);
+        break;
+      case 'T':
+        timeout_flips = atoi(optarg);
+        timeout_method = FLIPS;
+        log_str("c Timeout set to %d flips\n", timeout_flips);
         break;
       case 'v':
         set_verbosity(VERBOSE);
@@ -634,7 +672,10 @@ int main(int argc, char *argv[]) {
   cost_reducing_idxs_copy = xmalloc((num_vars + 1) * sizeof(int));
 #endif
 
-  run_algorithm();
+  for (int runs = 0; runs < num_restarts; runs++) {
+    run_algorithm();
+    reset_data_structures();
+  }
 
   return 0;
 }

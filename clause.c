@@ -35,11 +35,8 @@ int num_literals = 0;
 int num_clauses = 0;
 double init_clause_weight = DEFAULT_CLAUSE_WEIGHT;
 
-int stat_one = 0;
-int stat_two = 0;
-
 // Statistics
-int num_restarts = 0;
+int num_restarts = 1;
 long num_flips = 0;
 int lowest_unsat_clauses = 0;
 
@@ -269,6 +266,30 @@ void process_clauses() {
   }
 }
 
+/** @brief Resets the various data structures in use by clause.c
+ *         so the algorithm can run again on the same CNF file.
+ */
+void reset_data_structures() {
+  num_flips = 0;
+  lowest_unsat_clauses = 0;
+  
+  num_unsat_clauses = 0;
+  memset(false_clause_indexes, 0xff, num_clauses * sizeof(int));
+
+  num_cost_reducing_vars = 0;
+  memset(cost_reducing_idxs, 0xff, (num_vars + 1) * sizeof(int));
+
+  num_cost_compute_vars = 0;
+  memset(cost_compute_idxs, 0xff, (num_vars + 1) * sizeof(int));
+
+  // Redistribute weights to the clauses
+  double *weights = clause_weights;
+  for (int c = 0; c < num_clauses; c++) {
+    *weights = init_clause_weight;
+    weights++;
+  }
+}
+
 /** @brief Generates a random variable assignment for the global formula.
  *
  *  A random assignment is chosen for the num_vars variables. The random
@@ -359,7 +380,9 @@ void generate_random_assignment() {
 
   lowest_unsat_clauses = num_unsat_clauses;
 
-  log_assignment();
+  if (get_verbosity() == VERBOSE) {
+    log_assignment();
+  }
 }
 
 /** @brief Takes an index of a literal to flip and flips it in the assignment.

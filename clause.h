@@ -140,9 +140,6 @@ extern int num_literals;
 extern int num_clauses;
 extern double init_clause_weight;
 
-extern int stat_one;
-extern int stat_two;
-
 // Statistics
 extern int num_restarts;
 extern long num_flips;
@@ -186,6 +183,8 @@ void remove_cost_compute_var(const int v_idx); // Helper
 void initialize_formula(int num_cs, int num_vs);
 void initialize_clause(int clause_idx, int size, int *lit_idxs);
 void process_clauses();
+
+void reset_data_structures();
 
 void generate_random_assignment();
 void flip_variable(const int var_idx);

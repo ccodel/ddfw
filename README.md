@@ -32,8 +32,10 @@ For an up-to-date listing of the executable options, type `./ddfw -h` for a help
   -f <filename>
   -h
   -q
+  -r <runs>
   -s <seed>
   -t <timeout>
+  -T <flips>
   -v
   -w <double>
 ```
@@ -68,11 +70,17 @@ Including the `-h` option displays a help message and ends execution, regardless
 #### The -q option
 By default, `ddfw` runs at a "NORMAL" level of verbosity. Specifying the `-q` option makes `ddfw` run in "QUIET" mode, and so only necessary output is printed, such as which settings are specified for the current run and the solution, if found.
 
+#### The -r option
+By default, `ddfw` runs only a single time. To run the algorithm multiple times on the same CNF file, use the `-r` option to specify the number of restarts. The algorithm will restart when it times out, depending on the method.
+
 #### The -s option
 Flipping variables and choosing neighboring clauses depends on a pseudo-random number generator. The generator is initialized with a default seed value. A different seed value can be specified with the `-s` option. The seed must fit within a 32-bit signed integer value, but can be negative.
 
 #### The -t option
 The number of seconds until `ddfw` times out can be specified with the `-t` option. By default, `ddfw` runs for 100 seconds.
+
+#### The -T option
+The number of flips until `ddfw  times out. The algorithm is assumed to run until a certain number of seconds has passed, but specifying the `-T` option will instead make the algorithm time out after a certain number of flips. Do not specify both the `-t` and the `-T` options together, as behavior is then undefined.
 
 #### The -v option
 By default, `ddfw` runs at a "NORMAL" level of verbosity. Specifying the `-v` option makes `ddfw` run in "VERBOSE" mode, and so much more debugging output is printed.
