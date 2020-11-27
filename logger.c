@@ -69,6 +69,8 @@ void print_help(char *runtime_path) {
   printf("  -d                  Use DDFW original paper settings.\n");
   printf("  -f <filename>       Provide a .cnf file.\n");
   printf("  -h                  Display this help message.\n");
+  printf("  -m <method>         Selection method");
+  printf(" ([U]niform, [W]eighted, [B]est)\n");
   printf("  -q                  Quiet mode, no printing.\n");
   printf("  -r <runs>           Provide an optional number of runs\n");
   printf("  -s <seed>           Provide an optional randomization seed.\n");
