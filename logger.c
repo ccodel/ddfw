@@ -71,7 +71,8 @@ void print_help(char *runtime_path) {
   printf("  -h                  Display this help message.\n");
   printf("  -m <method>         Selection method");
   printf(" ([U]niform, [W]eighted, [B]est)\n");
-  printf("  -q                  Quiet mode, no printing.\n");
+  printf("  -q                  Quiet mode, only prints settings and stats.\n");
+  printf("  -Q                  Quiet mode, supresses solution, if found.\n");
   printf("  -r <runs>           Provide an optional number of runs\n");
   printf("  -s <seed>           Provide an optional randomization seed.\n");
   printf("  -t <timeout>        Provide");
@@ -164,7 +165,7 @@ void log_literal(int l_idx) {
           l_idx, VAR_IDX(l_idx), literal_occ[l_idx]);
       break;
     case VERBOSE:
-      printf("c Literal %d (var %d), occurrences: %dc    In clauses  \n",
+      printf("c Literal %d (var %d), occurrences: %d\nc    In clauses: ",
           l_idx, VAR_IDX(l_idx), literal_occ[l_idx]);
       const int occ = literal_occ[l_idx];
       int *l_to_clauses = literal_clauses[l_idx];

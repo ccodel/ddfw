@@ -218,8 +218,13 @@ static double a_prime = A;
 /** @brief The additive constant when underneath w_init. */
 static double c_prime = C;
 
+/** @brief Suppresses the printing of a solution if found. */
+static int suppress_solution = 0;
+
 #ifdef DEBUG
 static int *cost_reducing_idxs_copy = NULL;
+static int *cost_reducing_vars_copy = NULL;
+static double *cost_reducing_weights_copy = NULL;
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -235,6 +240,19 @@ static void verify_cost_reducing_vars() {
   memcpy(cost_reducing_idxs_copy, cost_reducing_idxs, 
       (num_vars + 1) * sizeof(int));
   memset(cost_reducing_idxs, 0xff, (num_vars + 1) * sizeof(int));
+  
+  // Store previous indexes, as they get messed up below
+  memcpy(cost_reducing_vars_copy, cost_reducing_vars,
+      num_cost_reducing_vars * sizeof(int));
+
+  // Next, copy over the weights
+  memcpy(cost_reducing_weights_copy, cost_reducing_weights,
+      num_cost_reducing_vars * sizeof(double));
+  memset(cost_reducing_weights, 0, num_cost_reducing_vars * sizeof(int));
+
+  // Alias arrays
+  double *crw = cost_reducing_weights;
+  double *crwc = cost_reducing_weights_copy;
 
   // Next, clear number of cost reducing vars and loop through all vars
   // TODO this is just copied from below, pull out into helper function?
@@ -291,22 +309,119 @@ static void verify_cost_reducing_vars() {
     }
   }
 
-  // Now compare the two indexes array
+  // Now compare the number of cost reducing variables found
   if (prev_num_cost_reducing != num_cost_reducing_vars) {
     printf("Number of cost reducing variables not the same, prev %d, now %d\n",
         prev_num_cost_reducing, num_cost_reducing_vars);
     exit(-1);
   }
 
+  // For each variable, check the internal consistency of both arrays
+  // Then cross-check arrays for membership and stored weight
   for (int i = 1; i <= num_vars; i++) {
-    if ((cost_reducing_idxs[i] == -1 && cost_reducing_idxs_copy[i] != -1) ||
-        (cost_reducing_idxs[i] != -1 && cost_reducing_idxs_copy[i] == -1)) {
-      printf("Arrays differed at var %d\n", i);
+    const int crix = cost_reducing_idxs[i];
+    const int cricx = cost_reducing_idxs_copy[i];
+
+    // First, check that they share cost-reducing status
+    if ((crix == -1 && cricx != -1) || (crix != -1 && cricx == -1)) {
+      printf("Arrays differed in index at var %d\n", i);
       exit(-1);
     }
+
+    // If both are present, check that their arrays are interally consistent
+    if (crix != -1) {
+      if (crix >= num_cost_reducing_vars || cricx >= num_cost_reducing_vars) {
+        printf("Indexes out of bounds for %d\n", i);
+        exit(-1);
+      }
+
+      if (cost_reducing_vars_copy[cricx] != i) {
+        printf("Cost reducing vars original not consistent for %d\n", i);
+        exit(-1);
+      }
+
+      if (cost_reducing_vars[crix] != i) {
+        printf("Cost reducing vars new copy not consistent for %d\n", i);
+        exit(-1);
+      }
+
+      // Now check that weights align
+      if (ABS(crw[crix] - crwc[cricx]) > 0.001) {
+        printf("Weights differed for variable %d\n", i);
+        printf("Weight in the original is %lf\n", crwc[cricx]);
+        printf("Weight in the new copy is %lf\n", crw[crix]);
+        exit(-1);
+      }
+    }
+  }
+
+  // Copy the copies back
+  memcpy(cost_reducing_idxs, cost_reducing_idxs_copy, 
+      (num_vars + 1) * sizeof(int));
+  memcpy(cost_reducing_weights, cost_reducing_weights_copy,
+      num_cost_reducing_vars * sizeof(double));
+  memcpy(cost_reducing_vars, cost_reducing_vars_copy,
+      num_cost_reducing_vars * sizeof(int));
+
+}
+
+
+/** @brief Verifies counts of satisfying literals and clauses.
+ *
+ *  Loops through all the clauses to check that the number of satisfying
+ *  literals for that clause is correct. Also keeps track of the number
+ *  of unsatisfied clauses in the entire formula and compares against
+ *  the amortized variable "num_unsat_clauses."
+ */
+static void verify_clauses_and_assignment() {
+  int *num_true_lits = clause_num_true_lits;
+  int *sizes = clause_sizes;
+  int **cl_to_lits = clause_literals;
+ 
+  int unsat_clause_counter = 0;
+
+  for (int i = 0; i < num_clauses; i++) {
+    // Extract out the size
+    const int size = *sizes;
+    const int true_lits = *num_true_lits;
+    int *lits = *cl_to_lits;
+
+    // Loop through the literals and check against assignment
+    int true_lit_counter = 0;
+    for (int j = 0; j < size; j++) {
+      char a = ASSIGNMENT(*lits);
+      int n = IS_NEGATED(*lits);
+      if ((a && !n) || (!a && n)) {
+        true_lit_counter++;
+      }
+      
+      lits++;
+    }
+
+    
+    if (true_lit_counter != true_lits) {
+      printf("Number of true literals differs for clause %d\n", i);
+      exit(-1);
+    }
+
+    if (true_lit_counter == 0) {
+      unsat_clause_counter++;
+    }
+
+    // Increment pointers into clause data
+    num_true_lits++;
+    sizes++;
+    cl_to_lits++;
+  }
+
+  if (unsat_clause_counter != num_unsat_clauses) {
+    printf("Number of unsat clauses differs\n");
+    exit(-1);
   }
 }
-#endif
+
+
+#endif /* DEBUG */
 
 /** @brief Finds those literals that cause a positive change in weighted
  *         cost if flipped and stores them in reducing_cost_lits.
@@ -379,7 +494,6 @@ static void find_cost_reducing_literals() {
     // Determine if flipping the truth value of the true literal
     //   would result in more satisfied weight than unsatisfied weight
     const double diff = satisfied_weight - unsatisfied_weight;
-    // log_str(" diff %.4f\n", diff);
     if (diff > 0.0) {
       add_cost_reducing_var(v_idx, diff); // Filter out 0 cost variables?
     } else if (diff <= 0.0) {
@@ -602,12 +716,19 @@ static void run_algorithm() {
           break;
       }
     }
+
+#ifdef DEBUG
+    verify_clauses_and_assignment();
+#endif
   }
 
   gettimeofday(&stop_time, NULL);
 
   // Print solution
-  output_assignment();
+  if (!suppress_solution) {
+    output_assignment();
+  }
+
   log_statistics(runs, &start_time, &stop_time);
 }
 
@@ -630,7 +751,7 @@ int main(int argc, char *argv[]) {
   char *filename = NULL;
   extern char *optarg;
   char opt;
-  while ((opt = getopt(argc, argv, "dhvqa:A:c:C:f:m:r:s:t:T:w:")) != -1) {
+  while ((opt = getopt(argc, argv, "dhvqQa:A:c:C:f:m:r:s:t:T:w:")) != -1) {
     switch (opt) { 
       case 'a':
         a = atof(optarg);
@@ -655,6 +776,8 @@ int main(int argc, char *argv[]) {
         a_prime = 1.0;
         c = -2.0;
         c_prime = -1.0;
+        log_str("c Using original DDFW paper configurations, which are:\n");
+        log_str("c Multiplicative constants 1.0, additive -2.0 and -1.0\n");
         break;
       case 'f':
         filename = optarg;
@@ -682,6 +805,8 @@ int main(int argc, char *argv[]) {
             break;
         }
         break;
+      case 'Q':
+        suppress_solution = 1; // Fallthrough
       case 'q':
         set_verbosity(SILENT);
         break;
@@ -757,6 +882,8 @@ int main(int argc, char *argv[]) {
 
 #ifdef DEBUG
   cost_reducing_idxs_copy = xmalloc((num_vars + 1) * sizeof(int));
+  cost_reducing_vars_copy = xmalloc(num_vars * sizeof(int));
+  cost_reducing_weights_copy = xmalloc(num_vars * sizeof(double));
 #endif
 
   for (runs = 1; runs <= num_restarts; runs++) {

@@ -112,12 +112,18 @@ static inline void remove_false_clause(int c_idx) {
 }
 
 inline void add_cost_reducing_var(const int v_idx, const double w) {
-  if (cost_reducing_idxs[v_idx] == -1) {
+  const int idx = cost_reducing_idxs[v_idx];
+  if (idx == -1) {
     cost_reducing_idxs[v_idx] = num_cost_reducing_vars;
     cost_reducing_vars[num_cost_reducing_vars] = v_idx;
     cost_reducing_weights[num_cost_reducing_vars] = w;
     total_cost_reducing_weight += w;
     num_cost_reducing_vars++;
+  } else {
+    // Update weight, change nothing else
+    total_cost_reducing_weight -= cost_reducing_weights[idx];
+    cost_reducing_weights[idx] = w;
+    total_cost_reducing_weight += w;
   }
 }
 
@@ -125,7 +131,7 @@ inline void remove_cost_reducing_var(const int v_idx) {
   const int idx = cost_reducing_idxs[v_idx];
   if (idx != -1) {
     num_cost_reducing_vars--;
-    total_cost_reducing_weight -= cost_reducing_weights[v_idx];
+    total_cost_reducing_weight -= cost_reducing_weights[idx];
 
     // If idx is not at the end, swap the end with this index
     if (idx != num_cost_reducing_vars) {
