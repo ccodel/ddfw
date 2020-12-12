@@ -1,7 +1,7 @@
 # DDFW - Divide and Distribute Fixed Weights
 ## Implemented by Cayden Codel, advised by Marijn Heule
 
-This repository contains an implementation of the "Divide and Distribute Fixed Weights" algorithm presented in the paper ["Neighbourhood Clause Weight Redistribution in Local Search for SAT"](https://www.researchgate.net/publication/29453919_Neighbourhood_Clause_Weight_Redistribution_in_Local_Search_for_SAT "DDFW paper") by Ishtaiwi, Thornton, Sattar, and Pham. The implemenetation in this repository differs from the original paper in that the clause weights are floating point numbers instead of integers, which allows for greater expression in the kinds of weight distribution policies available to the algorithm.
+This repository contains an implementation of the "Divide and Distribute Fixed Weights" algorithm presented in the paper ["Neighbourhood Clause Weight Redistribution in Local Search for SAT"](https://www.researchgate.net/publication/29453919_Neighbourhood_Clause_Weight_Redistribution_in_Local_Search_for_SAT "DDFW paper") by Ishtaiwi, Thornton, Sattar, and Pham. The implementation in this repository differs from the original paper in that the clause weights are floating point numbers instead of integers, which allows for greater expression in the kinds of weight distribution policies available to the algorithm.
 
 ## Compilation
 To compile, simply type
@@ -31,6 +31,7 @@ For an up-to-date listing of the executable options, type `./ddfw -h` for a help
   -d
   -f <filename>
   -h
+  -m <method>
   -q
   -r <runs>
   -s <seed>
@@ -67,8 +68,14 @@ Specify a path to a CNF file. The file does not need to end in `.cnf`, but does 
 #### The -h option
 Including the `-h` option displays a help message and ends execution, regardless of however many other options are specified.
 
+#### The -m option
+By default, method is WEIGHTED.
+
 #### The -q option
 By default, `ddfw` runs at a "NORMAL" level of verbosity. Specifying the `-q` option makes `ddfw` run in "QUIET" mode, and so only necessary output is printed, such as which settings are specified for the current run and the solution, if found.
+
+#### The -Q option
+The `-q` option, but with solution output suppressed.
 
 #### The -r option
 By default, `ddfw` runs only a single time. To run the algorithm multiple times on the same CNF file, use the `-r` option to specify the number of restarts. The algorithm will restart when it times out, depending on the method.
@@ -80,7 +87,7 @@ Flipping variables and choosing neighboring clauses depends on a pseudo-random n
 The number of seconds until `ddfw` times out can be specified with the `-t` option. By default, `ddfw` runs for 100 seconds.
 
 #### The -T option
-The number of flips until `ddfw  times out. The algorithm is assumed to run until a certain number of seconds has passed, but specifying the `-T` option will instead make the algorithm time out after a certain number of flips. Do not specify both the `-t` and the `-T` options together, as behavior is then undefined.
+The number of flips until `ddfw`  times out. The algorithm is assumed to run until a certain number of seconds has passed, but specifying the `-T` option will instead make the algorithm time out after a certain number of flips. Do not specify both the `-t` and the `-T` options together, as behavior is then undefined.
 
 #### The -v option
 By default, `ddfw` runs at a "NORMAL" level of verbosity. Specifying the `-v` option makes `ddfw` run in "VERBOSE" mode, and so much more debugging output is printed.

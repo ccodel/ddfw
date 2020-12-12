@@ -21,6 +21,7 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "logger.h"
 #include "clause.h"
@@ -96,9 +97,14 @@ void print_help(char *runtime_path) {
  *  @param runtime_path The string name of the running executable, e.g. ./ddfw
  */
 void print_usage(char *runtime_path) {
-  printf("Usage: %s [-hqv] -f <filename> [-s <seed>] [-t <timeout>]\n", 
-      runtime_path);
-  printf("                [-w <double>] [-aAcC <double>]\n");
+  int len = strlen(runtime_path);
+  printf("%s [-hqQv] -f <filename>\n", runtime_path);
+  for (int i = 0; i < len; i++) printf(" ");
+  printf(" [-d] [-aAcCw <double>]\n");
+  for (int i = 0; i < len; i++) printf(" ");
+  printf(" [-m <method>] [-r <runs>] [-s <seed>]\n");
+  for (int i = 0; i < len; i++) printf(" ");
+  printf(" [-t <seconds>] [-T <flips>]\n");
 }
 
 /** @brief Returns the logger's verbosity level.

@@ -3,7 +3,6 @@
  *
  *  See xmalloc.c for implementation details.
  *
- *  @author Joseph Reeves (jereeves@andrew.cmu.edu)
  *  @author Cayden Codel  (ccodel@andrew.cmu.edu)
  *
  *  @bug No known bugs.

@@ -1,27 +1,127 @@
 /** @file ddfw.c - Divide and Distribute Fixed Weights
  *  @brief An implementation of the DDFW algorithm, as presented in 
  *         the paper: "Neighbourhood Clause Weight Redistribution in 
- *                     Local Search for SAT" [Ishtaiwi, Thornton, Sattar, Pham]
+ *         Local Search for SAT" [Ishtaiwi, Thornton, Sattar, Pham].
  *
  *  Note that this implementation of DDFW assumes that:
  *   - No clause has more than MAX_CLAUSE_LENGTH literals in it
- *   - No clause contains a tautology (e.g. (x v !x))
+ *   - No holes exist in the variables in the CNF (undefined behavior)
+ *
+ *  Note that this implementation may perform best after:
+ *   - Preprocessing of single literal clauses
  *  
  *  ///////////////////////////////////////////////////////////////////////////
  *  // HIGH LEVEL OVERVIEW OF DDFW
  *  ///////////////////////////////////////////////////////////////////////////
  *  
- *  TODO High level discussion here.
+ *  DDFW is a stochastic local search (SLS) SAT solver that attempts to solve
+ *  satisfiable CNF boolean formulas by iteratively flipping boolean variables
+ *  until either a solution is found or timeout is reached. When the CNF
+ *  formula is read in, an initial starting weight is given to each clause.
+ *  For each variable flip, a variable that can reduce the total amount of
+ *  weight held by unsatisfiable clauses is chosen. If no such variable exists,
+ *  then weight is distributed from satisfied clauses to unsatisfied clauses.
+ *  
+ *  Unlike the original DDFW implementation, which used integers for clause
+ *  weights only, this implementation of DDFW uses floating-point nubmers
+ *  for clause weights. Floating-point numbers allow for greater expressivity
+ *  in the weight re-distribution policy used when no weight-reducing variables
+ *  are left to flip.
+ *
+ *  The body of the algorithm is implemented in this file, but helper files
+ *  contain important data structures, parsing functions, and logging utilities.
+ *  Below is a listing of each helper file and its supporting purpose:
+ *
+ *    - clause:  Data structures for literals, clauses, assignment, etc.
+ *    - cnf_parser: Parses the provided CNF file and pulls out clause info.
+ *    - logger:  Logs strings and data structures according to verbosity level.
+ *    - xmalloc: Guaranteed memory allocation. Wrappers around exit().
+ *  
+ *  See below for a high-level description of various implementation features.
+ *  See each file listed above for a more in-depth description and for code.
  *
  *  ///////////////////////////////////////////////////////////////////////////
  *  // IMPLEMENTATION
  *  ///////////////////////////////////////////////////////////////////////////
  *  
- *  TODO Implementation discussion here.
+ *  DDFW solves boolean formulas in conjunctive normal form (CNF), meaning that
+ *  boolean variables are grouped in disjunctive clauses (ORs) joined by ANDs.
+ *  The format of the CNF formula provides many opportunities for optimization
+ *  and "tricks of the trade" to minimize the amount of work done at each
+ *  variable flip, keeping the implementation efficient.
  *
- *  Potential improvement according to
+ *  In spirit, literals are represented by the struct
  *
- *   https://www.keithschwarz.com/darts-dice-coins/
+ *    typedef struct boolean_literal {
+ *      int var_symbol;
+ *      int occurrences;
+ *      clause_t **clauses;
+ *    } literal_t;
+ *
+ *  where each literal stores its variable symbol from the CNF file, the 
+ *  number of clauses it occurs in, and an array of clauses that contain 
+ *  it. Similarly, clauses are represented, in spirit, by the struct
+ *
+ *    typedef struct disjunctive_clause {
+ *      int id;
+ *      int size;
+ *      int num_true_lits;
+ *      int sat_lit_mask;
+ *      double weight;
+ *      literal_t **literals;
+ *    } clause_t;
+ *
+ *  where each clause stores which line from the CNF file it lies on, the
+ *  number of literals it contains, how many of those literals are true under 
+ *  the current assignment, an XOR of its satisfying literals to easily
+ *  identify the symbol of the last remaining satisfying literal, its weight,
+ *  and an array of literals contained in it.
+ *
+ *  However, implementing the above data structures caused two orders of
+ *  magnitude slowdown due to pointer arithmetic inside and across structs.
+ *  Therefore, the above data structures are "split up" into their component
+ *  fields as individual arrays indexed by literal or clause id. While doing
+ *  so makes the codebase harder to manage, the speedup is necessary to have
+ *  a practical SAT solver useful for anything more than trivial formulas.
+ *  The breakup of the data structures is handled by clause.h/.c.
+ *
+ *  The main body of DDFW is implemented in run_ddfw_algorithm(). After noting
+ *  the system time, the loop will continually flip variables and distribute
+ *  weight between clauses until a solution is found or until one of the two
+ *  timeout conditions is met (CPU clock time or number of flips). To minimize
+ *  the number of system calls, the time is not checked on every loop, but
+ *  once every LOOPS_PER_TIMEOUT_CHECK loops.
+ *
+ *  In choosing which variable to flip, one of three selection methods are
+ *  used: UNIFORM, WEIGHTED, and BEST. The UNIFORM method will select any
+ *  cost-reducing varaible with equal probability. The WEIGHTED method will
+ *  select variables with a weighted probability according to the amount of
+ *  weight reduced by flipping that variable. The BEST method will select
+ *  the variable with the highest weight reduction.
+ *
+ *  If no cost-reducing variables are present, then for each unsatisfied
+ *  clause, weight is distributed from one of its adjacent satisfied clauses
+ *  with the hightest weight. Occasionally, a random satisfied clause is
+ *  chosen instead. Weight is distributed according to a linear rule:
+ *
+ *    Let c be the current unsatisfied clause, and let n be its highest weight
+ *    neighbor. Also, INIT_WEIGHT is the initial weight given to each clause,
+ *    "a" and "A" are mutliplicative constants, and "c" and "C" are additive
+ *    constants. Then weight is re-assigned via
+ *
+ *    double diff;
+ *    if (n->weight < INIT_WEIGHT) diff = n->weight - (a * n->weight + c);
+ *    else                         diff = n->weight - (A * n->weight + C);
+ *    c->weight += diff;
+ *    n->weight -= diff;
+ *
+ *  By adjusting a, A, c, and C at the command line, different linear rules
+ *  can be applied to the weights of the clauses. Setting a = A and c = C
+ *  removes the effect of the if-statement.
+ *
+ *  Additional details regarding command-line arguments, data structures,
+ *  and other implementation details can be found in the appropriate files
+ *  or above each function.
  *
  *  ///////////////////////////////////////////////////////////////////////////
  *  // QUIRKY IMPLEMENTATION DETAILS
@@ -33,25 +133,24 @@
  *  defines the total number of *variables*, not the total number of literals.
  *  Therefore, there are twice as many literals as there are variables.
  *
- *  In this implementation, each literal has a unique literal_t struct that
- *  is allocated contiguously in the literals array. Literals are stored
+ *  In this implementation, each literal has a literal_t struct "in spirit" that
+ *  is allocated across the split-up arrays in clause.h/.c. Literals are stored
  *  adjacently to their negated form. So, if the literal is (l = 5), then
  *  the index into the literals array to access the literal_t struct for
  *  l is (2 * 5), and the index for !l is (2 * 5) + 1. Because DIMACS variables
- *  are 1-indexed, the literals array has "two too many" to preserve the
- *  1-indexing of DIMACS format.
+ *  are 1-indexed, each array containing literal information has "two too many" 
+ *  elements to preserve the 1-indexing of DIMACS format.
  *
- *  The clauses are 0-indexed, however, as the clause_t array, clauses, is
- *  built internally.
+ *  The clauses are 0-indexed, however, across their split-up arrays.
  *
  *  The motivation behind using a [l1, !l1, l2, !l2, ...] literals storage
  *  structure, as opposed to all positive literals on one side of a pointer
  *  and all negated literals on the other, is to take advantage of caching
  *  when accessing l and !l together. For example, when flipping a literal
  *  in the assignment, clauses for both l and !l must be updated, and so
- *  both literal_t structs are accessed together. Whether or not such caching
- *  effects can be felt during runtime is something the author has not
- *  investigated, and stands as a potential optimization.
+ *  both literal_t structs are accessed together "in spirit." Whether or not 
+ *  such caching effects can be felt during runtime is something the author 
+ *  has not investigated, and stands as a potential optimization.
  *
  *  ///////////////////////////////////////////////////////////////////////////
  *  // CREDITS AND ACKNOWLEDGEMENTS
@@ -65,12 +164,19 @@
  *  @author   John Thornton       (j.thornton@griffith.edu.au)
  *  @author   Abdul Sattar        (a.sattar@griffith.edu.au)
  *  @author   Duc Nghia Pham      (d.n.pham@griffith.edu.au)
- *  
+ *
  *  ///////////////////////////////////////////////////////////////////////////
  *  // BUGS AND TODOS
  *  ///////////////////////////////////////////////////////////////////////////
+ *  
+ *  Potential improvement according to
+ *   https://www.keithschwarz.com/darts-dice-coins/
  *
- *  @bug No known bugs.
+ *  The WEIGHTED and BEST probability distributions are found linearly, which
+ *  can cause slowdown. A tree or segtree data structure may be best here.
+ *
+ *  @bugs No known bugs.
+ *
  *  @todos Many todos.
  */
 
@@ -83,6 +189,7 @@
 #include <time.h>
 #include <float.h>
 
+#include "ddfw.h"
 #include "clause.h"
 #include "cnf_parser.h"
 #include "logger.h"
@@ -92,49 +199,61 @@
 // CONFIGURATION MACROS
 ///////////////////////////////////////////////////////////////////////////////
 
-/** Default number of seconds to loop before timing out. 
+/** @brief Default number of seconds to loop before timing out. 
+ *  
  *  Can be toggled with the -t <timeout_secs> flag at the command line.
  **/
-#define DEFAULT_TIMEOUT_SECS              (100)
+#define DEFAULT_TIMEOUT_SECS        100
 
-/** Default number of flips before timing out. */
-#define DEFAULT_TIMEOUT_FLIPS             1000000
-
-/** Default number of times a loop body is run before the number of elapsed
- *  seconds is checked. Not currently configurable.
+/** @brief The number of times the main DDFW loop body is run before the number 
+ *         of elapsed seconds is checked. Not currently configurable.
  *
  *  TODO maybe define this based on some computed runtime quantity? Make
  *       smaller based on number of clauses/literals?
  */
-#define DEFAULT_LOOPS_PER_TIMEOUT_CHECK   (1000000)
+#ifdef DEBUG
+#define LOOPS_PER_TIMEOUT_CHECK     1000
+#else
+#define LOOPS_PER_TIMEOUT_CHECK     1000000
+#endif
 
-/** Default randomization seed. */
-#define DEFAULT_SEED                      (0xdeadd00d)
-
-/** When transferring weights, weight is transferred from a clause cf to a
- *  clause ct. If we let the weight of cf to be wf and the weight of ct to
- *  be wt, then the weights of the two are adjusted according to:
+/** @brief Default multiplicative and additive constants.
  *
- *    cf = a * cf + c
- *    ct = cf - (a * cf + c)
+ *  When transferring weights, weight is transferred according to a linear
+ *  rule, highlighted at the top of the file. DEFAULT_A is the default 
+ *  multiplicative constant for both "a" and "A," and DEFAULT_C is the
+ *  default additive constant for both "c" and "C."
  *
- *  To more closely reflect the original paper, a is set to 1 and c is -2.
+ *  The values of 1.0 and -2.0 were chosen to match the original DDFW paper.
  */
-#define A   (1.0)
-#define C   (-2.0)
+#define DEFAULT_A   (1.0)
+#define DEFAULT_C   (-2.0)
 
-/** @brief Numerator to random walk if no cost reducing literals */
-#define DEFAULT_RANDOM_WALK_NUM              (15)
-
-/** @brief Denominator to random walk if no cost reducing literals */
-#define DEFAULT_RANDOM_WALK_DEN              (100)
-
-/** @brief The default probability that the maximum weight neighboring clause
- *         is disregarded for a random clause.
+/** @brief The probability with which to select a random variable to flip 
+ *         when no cost-reducing variables remain.
  *
- *  TODO configurable?
+ *  Because the pseudo-random number generator only returns integers, an
+ *  integer representation for the random walk probability was chosen. The
+ *  random number is taken mod DEN, and compared to be less than NUM.
+ *
+ *  In the original DDFW paper, the random walk probability was 15%.
  */
-#define DEFAULT_RANDOM_CLAUSE_PROB          (0.01)
+#define RANDOM_WALK_NUM       15
+#define RANDOM_WALK_DEN       100
+
+/** @brief The probability that the maximum weight neighboring clause is
+ *         disregarded for a random clause when distributing weights.
+ *
+ *  Because the pseudo-random number generator only returns integers, an
+ *  integer representation for the probability was chosen. The random number
+ *  is taken mod DEN, and compared to be less than NUM.
+ *
+ *  While not mentioned in the original DDFW paper, the implementation provided
+ *  by the authors included a probability to disregard the maximum weight
+ *  neighbor. The value from the original implementation was 1%.
+ */
+#define RAND_NEIGH_NUM   1
+#define RAND_NEIGH_DEN   100
 
 ///////////////////////////////////////////////////////////////////////////////
 // HELPER MACROS
@@ -155,81 +274,81 @@
 #define MAX(x, y)  (((x) > (y)) ? (x) : (y))
 #endif
 
+/** @brief What run number the algorithm is on. */
+int algorithm_run;
 
-/** @brief Defines whether the algorithm will timeout due to time or
- *         number flips.
- */
-typedef enum timeout_method {
-  TIME, FLIPS
-} timeout_method_t;
-
-/** @brief Defines the selection method for the flipped variable.
+/** @brief Timeout method. Times out after DEFAULT_TIMEOUT_SECS seconds.
  *
- *  UNIFORM is a uniform distribution across the candidate variables.
- *  WEIGHTED is a weighted probability distribution according to weights.
- *  BEST is the best weighted variable.
+ *  Can be toggled with the -t and -T command-line options.
  */
-typedef enum variable_selection_method {
-  UNIFORM, WEIGHTED, BEST
-} selection_method_t;
+timeout_method_t timeout_method = DEFAULT;
 
-///////////////////////////////////////////////////////////////////////////////
-// STATIC GLOBAL VARIABLE DECLARATIONS
-///////////////////////////////////////////////////////////////////////////////
-
-/** @brief What run number the program is on. */
-static int runs;
-
-/** @brief Timeout method. By default, times out by time. */
-static timeout_method_t timeout_method = TIME;
-
-/** @brief Variable selection method. By default, weighted probabilities. */
-static selection_method_t selection_method = WEIGHTED;
+/** @brief Variable selection method. Selects variable by weighted probability.
+ *
+ *  Can be toggled with the -m command-line option.
+ */
+selection_method_t selection_method = WEIGHTED;
 
 /** @brief Number of seconds before instance timeout.
  *
- *  Can be toggled with the -t <secs> flag when running the executable.
- *  The amount of time elapsed is checked every DEFAULT_LOOPS_PER_TIMEOUT_CHECK 
- *  loops of the main loop body.
+ *  Can be toggled with the -t <secs> command-line option. The elapsed time
+ *  is checked every LOOPS_PER_TIMEOUT_CHECK loops of the main loop body.
  */
-static int timeout_secs = DEFAULT_TIMEOUT_SECS;
+int timeout_secs = DEFAULT_TIMEOUT_SECS;
 
 /** @brief Number of flips before instance timeout.
  *
  *  Can be toggled with the -T <flips> flag when running the executable.
+ *  When the timeout_method is DEFAULT, the number of flips is not checked.
  */
-static int timeout_flips = -1;
+int timeout_flips = -1;
 
-/** @brief The probability that, instead of transferring weight from the
- *         maximum weighted neighbor, weight is transferred from a randomly
- *         chosen satisfied neighboring clause.
+/** @brief The multiplicative constant in weight transferral. 
+ *
+ *  When the weight of the neighboring clause is at least init_clause_weight,
+ *  then "a" is used. Can be specified with the -a <a> command-line option.
  */
-static int random_clause_prob = (int) (1.0 / DEFAULT_RANDOM_CLAUSE_PROB);
+double mult_a = DEFAULT_A;
 
-/** @brief The multiplicative constant in weight transferral. */
-static double a = A;
+/** @brief The additive constant in weight transferral.
+ *
+ *  When the weight of the neighboring clause is at least init_clause_weight,
+ *  then "c" is used. Can be specified with the -c <c> command-line option.
+ */
+double add_c = DEFAULT_C;
 
-/** @brief The additive constant in weight transferral. */
-static double c = C;
+/** @brief The multiplicative constant for when beneath init_clause_weight.
+ *  
+ *  When the weight of the neighboring clause is less than init_clause_weight,
+ *  then "A" is used. Can be specified with the -A <A> command-line option.
+ */
+double mult_A = DEFAULT_A;
 
-/** @brief The multiplicative constant when underneath w_init. */
-static double a_prime = A;
+/** @brief The additive constant for when beneath init_clause_weight.
+ *
+ *  When the weight of the neighboring clause is less than init_clause_weight,
+ *  then "C" is used. Can be specified with the -C <C> command-line option.
+ */
+double add_C = DEFAULT_C;
 
-/** @brief The additive constant when underneath w_init. */
-static double c_prime = C;
-
-/** @brief Suppresses the printing of a solution if found. */
-static int suppress_solution = 0;
+/** @brief Suppresses the printing of a solution if found. 
+ * 
+ *  TODO move this into the logger
+ */
+int suppress_solution = 0;
 
 #ifdef DEBUG
+/** @brief Membership array data structure used for verifying the calculation
+ *         of cost-reducing variables. Not included in normal compilation.
+ */
 static int *cost_reducing_idxs_copy = NULL;
 static int *cost_reducing_vars_copy = NULL;
 static double *cost_reducing_weights_copy = NULL;
 #endif
 
-////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
 // DDFW algorithm implementation
-////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
 
 #ifdef DEBUG
 /** @brief Verifies the computed cost reducing vars by looping over all
@@ -257,7 +376,9 @@ static void verify_cost_reducing_vars() {
   // Next, clear number of cost reducing vars and loop through all vars
   // TODO this is just copied from below, pull out into helper function?
   const int prev_num_cost_reducing = num_cost_reducing_vars;
+  const double prev_total_cost = total_cost_reducing_weight;
   num_cost_reducing_vars = 0;
+  total_cost_reducing_weight = 0.0;
   for (int v_idx = 1; v_idx <= num_vars; v_idx++) {
     const int l_idx = LIT_IDX(v_idx);
     const int assigned = ASSIGNMENT(l_idx);
@@ -316,6 +437,13 @@ static void verify_cost_reducing_vars() {
     exit(-1);
   }
 
+  // Compare the total cost of reducing variables
+  if (ABS(total_cost_reducing_weight - prev_total_cost) > 0.01) {
+    printf("Total cost differed, prev %lf, now %lf\n",
+        prev_total_cost, total_cost_reducing_weight);
+    exit(-1);
+  }
+
   // For each variable, check the internal consistency of both arrays
   // Then cross-check arrays for membership and stored weight
   for (int i = 1; i <= num_vars; i++) {
@@ -347,9 +475,8 @@ static void verify_cost_reducing_vars() {
 
       // Now check that weights align
       if (ABS(crw[crix] - crwc[cricx]) > 0.001) {
-        printf("Weights differed for variable %d\n", i);
-        printf("Weight in the original is %lf\n", crwc[cricx]);
-        printf("Weight in the new copy is %lf\n", crw[crix]);
+        printf("Weights differed for variable %d: orig %lf, new %lf\n", 
+            i, crwc[cricx], crw[crix]);
         exit(-1);
       }
     }
@@ -362,7 +489,7 @@ static void verify_cost_reducing_vars() {
       num_cost_reducing_vars * sizeof(double));
   memcpy(cost_reducing_vars, cost_reducing_vars_copy,
       num_cost_reducing_vars * sizeof(int));
-
+  total_cost_reducing_weight = prev_total_cost;
 }
 
 
@@ -374,14 +501,13 @@ static void verify_cost_reducing_vars() {
  *  the amortized variable "num_unsat_clauses."
  */
 static void verify_clauses_and_assignment() {
+  // Alias pointers used for iteration
   int *num_true_lits = clause_num_true_lits;
   int *sizes = clause_sizes;
   int **cl_to_lits = clause_literals;
- 
   int unsat_clause_counter = 0;
 
   for (int i = 0; i < num_clauses; i++) {
-    // Extract out the size
     const int size = *sizes;
     const int true_lits = *num_true_lits;
     int *lits = *cl_to_lits;
@@ -419,31 +545,27 @@ static void verify_clauses_and_assignment() {
     exit(-1);
   }
 }
-
-
 #endif /* DEBUG */
 
-/** @brief Finds those literals that cause a positive change in weighted
- *         cost if flipped and stores them in reducing_cost_lits.
- *         Stores the number of such literals in num_reducing_cost_lits.
+/** @brief Finds the literals that cause a decrease in the total amount of
+ *         weight held by unsatisfied clauses if flipped and stores their
+ *         indexes into the array cost_reducing_vars.
  *
  *  According to the DDFW algorithm, the first thing done per each loop body
  *  is to "find and return a list L of literals causing the greatest reduction
- *  in weighted cost delta(w) when flipped."
+ *  in weighted cost delta(w) when flipped." While the list L could be computed 
+ *  by looping over every literal, every loop, that would result in much 
+ *  redundant computation, as only those literals involved in a clause with a 
+ *  flipped literal would have their cost calculations change.
  *
- *  While the list L could be computed by looping over every literal, every
- *  loop, that would result in much redundant computation, as only those
- *  literals involved in a clause with a flipped literal would have their
- *  cost calculations change.
- *
- *  As a result, flipping literals causes literal indexes to be stored in 
- *  cost_compute_vars, which acts as a sort of stack. This function pops
+ *  As a result, flipping literals causes variable indexes to be stored in 
+ *  cost_compute_vars, which acts as a sort of stack. This function pops off
  *  every variable index in the stack and re-computes its delta(w). If
- *  delta(w) is strictly positive, the variable is added to the list
+ *  delta(w) is strictly positive, the variable index is added to the list
  *  of cost reducing variables.
  */
 static void find_cost_reducing_literals() {
-  // Loop through those variables in the cost_compute_vars to compute cost
+  // Loop through those variables in the cost_compute_vars
   // Most efficient to do from the back of the cost compute vars array
   int *cc_vars = cost_compute_vars + num_cost_compute_vars - 1;
   const int num_cc_vars = num_cost_compute_vars;
@@ -453,8 +575,6 @@ static void find_cost_reducing_literals() {
     const int assigned = ASSIGNMENT(l_idx);
     double satisfied_weight = 0.0;
     double unsatisfied_weight = 0.0;
-
-    // log_str("Checking var %d, truth value %d;", v_idx, assigned);
 
     // Determine the index of the true literal
     int true_idx, false_idx;
@@ -469,7 +589,7 @@ static void find_cost_reducing_literals() {
     const int true_occ = literal_occ[true_idx];
     const int false_occ = literal_occ[false_idx];
 
-    // Loop over satisfied clauses containing the true literal
+    // Check clauses containing the true literal for ones that can become unsat
     int *l_to_clauses = literal_clauses[true_idx];
     for (int c = 0; c < true_occ; c++) {
       const int c_idx = *l_to_clauses;
@@ -480,7 +600,7 @@ static void find_cost_reducing_literals() {
       l_to_clauses++;
     }
 
-    // Loop over unsatisfied clauses containing the false literal
+    // Check clauses containing the false literal for those that can become sat
     l_to_clauses = literal_clauses[false_idx];
     for (int c = 0; c < false_occ; c++) {
       const int c_idx = *l_to_clauses;
@@ -495,7 +615,7 @@ static void find_cost_reducing_literals() {
     //   would result in more satisfied weight than unsatisfied weight
     const double diff = satisfied_weight - unsatisfied_weight;
     if (diff > 0.0) {
-      add_cost_reducing_var(v_idx, diff); // Filter out 0 cost variables?
+      add_cost_reducing_var(v_idx, diff);
     } else if (diff <= 0.0) {
       remove_cost_reducing_var(v_idx);
     }
@@ -510,38 +630,33 @@ static void find_cost_reducing_literals() {
 #endif
 }
 
-/** @brief Transfers weight from one clause to another in the distribute step.
+/** @brief Transfers weight from a neighboring satisfied clause to an
+ *         unsatisfied clause when no more cost-reducing variables exist.
  *
- *  Since the transferral was specified one way for the discrete case, I
- *  will be playing around with the continuous case here. For now, the
- *  weight is distributed by
- *   
- *   - halving the weight of the satisfied clause
- *   - adding that weight to the unsatisfied clause
+ *  Weight is distributed according to a linear rule, with additive and
+ *  multiplicative constants used as specified at the command line. When
+ *  the weight held by the satisfied clause is less than init_clause_weight,
+ *  a different set of constants is used.
  *
  *  @param from_idx The clause index that weight is taken from.
  *  @param to_idx   The clause index that weight is given to.
  */
-static inline void transfer_weight(int from_idx, int to_idx) {
-  // Check if weight is under init_clause_weight
+static inline void transfer_weight(const int from_idx, const int to_idx) {
   double orig = clause_weights[from_idx];
-
-  // Use prime version of variables if under init weight
   if (orig < init_clause_weight) {
-    clause_weights[from_idx] *= a_prime;
-    clause_weights[from_idx] += c_prime;
+    clause_weights[from_idx] *= mult_A;
+    clause_weights[from_idx] += add_C;
   } else {
-    clause_weights[from_idx] *= a;
-    clause_weights[from_idx] += c;
+    clause_weights[from_idx] *= mult_a;
+    clause_weights[from_idx] += add_c;
   }
 
-  // Whatever weight was taken away is given to unsat clause
+  // Whatever weight was taken away is given to the unsat clause
   double diff = orig - clause_weights[from_idx];
   clause_weights[to_idx] += diff;
 
-  // Assume the "from" clause is satisfied - then only the satisfied
-  //   literal inside must have its cost change re-computed
-  // assert(clause_num_true_lits[from_idx] > 0);
+  // Since the "from" clause is satisfied, only the satisfied literal inside
+  //   must have its cost-reducing status re-computed
   if (clause_num_true_lits[from_idx] == 1) {
     const int mask_lit = clause_lit_masks[from_idx];
     add_cost_compute_var(VAR_IDX(mask_lit));
@@ -560,12 +675,19 @@ static inline void transfer_weight(int from_idx, int to_idx) {
 /** @brief Distribute weights from satisfied to unsatisfied clauses.
  *  
  *  In the case where no literals may be flipped to decrease the weight
- *  of the unsat clauses, the weight will be re-distributed from satisfied
- *  to unsatisfied clauses according to the following rule:
+ *  held by the unsatisfied clauses, the weight will be re-distributed from 
+ *  satisfied to unsatisfied clauses according to the following rule:
  *
- *  for each unsatisfied clause c,
- *    select a satisfied same sign neighboring clause cn with max weight wn
+ *  For each unsatisfied clause cf, select a satisfied same-sign neighbor with 
+ *  maximum weight ck. If such a ck does not exist, or if ck has weight under
+ *  init_clause_weight, then a random clause with weight at least
+ *  init_clause_weight is chosen instead.
  *
+ *  TODO what if only take random clause?
+ *
+ *  If the chosen ck has weight greater than init_clause_weight, then the first
+ *  set of additive and multiplicative constants is used. If not, then the
+ *  second set is used instead.
  */
 static void distribute_weights() {
   // Loop over all clauses, picking out those that are false
@@ -577,7 +699,7 @@ static void distribute_weights() {
 
     // Scan for any neighboring clause that is satisfied and has max weight
     int max_neighbor_idx = -1;
-    double max_neighbor_weight = -1.0;
+    double max_neighbor_weight = -100000;
 
     // Loop over the literals in the clause to search for neighboring sat clause
     int *cl_lits = clause_literals[c_idx];
@@ -603,28 +725,32 @@ static void distribute_weights() {
       cl_lits++;
     }
 
-    // If a maximum weight neighbor has been found for this clause
+    /* 
+     * While not mentioned in the original DDFW paper, it was in the code...
+     * If a maximum weight neighbor has been found for this clause, then
+     * erase the neighbor index if the weight isn't high enough or with
+     * some small probability
+     */
     if (max_neighbor_idx != -1) {
-      // Transfer weight with almost 1 probability
-      if (rand() % random_clause_prob != 0) {
-        transfer_weight(max_neighbor_idx, c_idx);
-      } else {
-        // Select random satisfied clause instead by choosing random indexes
-        // NOTE: This was not mentioned in the original paper, but instead
-        // found in the original code by the authors. The form it takes in
-        // the UBCSAT code is to take any random clause, rather than a
-        // neighboring same-sign clause. Potential TODO
-        unsigned int r_idx;
-        do {
-          r_idx = ((unsigned int) rand()) % num_clauses;
-        } while (clause_num_true_lits[r_idx] == 0); // TODO weight case
-
-        transfer_weight(r_idx, c_idx);
+      if (max_neighbor_weight < init_clause_weight ||
+          ((unsigned int) rand()) % RAND_NEIGH_DEN < RAND_NEIGH_NUM) {
+        max_neighbor_idx = -1;
       }
     }
 
-    // Move to the next false clause in the array
-    false_clauses++;
+    /*
+     * If we don't have a max-weight neighbor, then select a random sat clause
+     * with weight at least init_clause_weight
+     */
+    if (max_neighbor_idx == -1) {
+      do {
+        max_neighbor_idx = ((unsigned int) rand()) % num_clauses;
+      } while (clause_num_true_lits[max_neighbor_idx] == 0 || 
+          clause_weights[max_neighbor_idx] < init_clause_weight);
+    }
+
+    transfer_weight(max_neighbor_idx, c_idx);
+    false_clauses++; // Next false clause in the array
   }
 }
 
@@ -632,13 +758,20 @@ static void distribute_weights() {
  *
  *  Main loop.
  */
-static void run_algorithm() {
+void run_ddfw_algorithm() {
+#ifdef DEBUG
+  if (cost_reducing_idxs_copy == NULL) {
+    cost_reducing_idxs_copy = xmalloc((num_vars + 1) * sizeof(int));
+    cost_reducing_vars_copy = xmalloc(num_vars * sizeof(int));
+    cost_reducing_weights_copy = xmalloc(num_vars * sizeof(double));
+  }
+#endif
+
   generate_random_assignment();
 
   // Record the time to ensure no timeout
-  int timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
+  int timeout_loop_counter = LOOPS_PER_TIMEOUT_CHECK;
   struct timeval start_time, stop_time;
-
   gettimeofday(&start_time, NULL);
 
   int var_to_flip;
@@ -689,8 +822,7 @@ static void run_algorithm() {
       }
 
       var_to_flip = cost_reducing_vars[rand_var];
-    } else if (((unsigned int) rand()) % DEFAULT_RANDOM_WALK_DEN <
-        DEFAULT_RANDOM_WALK_NUM) {
+    } else if (((unsigned int) rand()) % RANDOM_WALK_DEN < RANDOM_WALK_NUM) {
       var_to_flip = ((unsigned int) rand()) % num_vars;
     } else {
       distribute_weights();
@@ -700,12 +832,15 @@ static void run_algorithm() {
     flip_variable(var_to_flip);
 
     // Determine if enough flips/loops have passed to update time variable
-    if (timeout_method == FLIPS && num_flips >= timeout_flips) {
+    if ((timeout_method == FLIPS || timeout_method == BOTH) 
+        && num_flips >= timeout_flips) {
       break;
-    } else {
+    }
+
+    if (timeout_method != FLIPS) {
       timeout_loop_counter--;
       if (timeout_loop_counter == 0) {
-        timeout_loop_counter = DEFAULT_LOOPS_PER_TIMEOUT_CHECK;
+        timeout_loop_counter = LOOPS_PER_TIMEOUT_CHECK;
         gettimeofday(&stop_time, NULL);
 
         log_str("c %d unsatisfied clauses after %d flips\n", 
@@ -729,167 +864,5 @@ static void run_algorithm() {
     output_assignment();
   }
 
-  log_statistics(runs, &start_time, &stop_time);
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// Main execution
-////////////////////////////////////////////////////////////////////////////////
-
-/** @brief Main function. Processes input arguments and kicks off solver.
- *
- *  @param argc The number of arguments to the command line.
- *  @param argv The array of string arguments given on the command line.
- */
-int main(int argc, char *argv[]) {
-  if (argc == 1) {
-    print_usage(argv[0]);
-    exit(1);
-  }
- 
-  int seed = DEFAULT_SEED;
-  char *filename = NULL;
-  extern char *optarg;
-  char opt;
-  while ((opt = getopt(argc, argv, "dhvqQa:A:c:C:f:m:r:s:t:T:w:")) != -1) {
-    switch (opt) { 
-      case 'a':
-        a = atof(optarg);
-        log_str("c Multiplicative scalar is %lf\n", a);
-        break;
-      case 'A':
-        a_prime = atof(optarg);
-        log_str("c Alternative multiplicative scalar is %lf\n", a_prime);
-        break;
-      case 'c':
-        c = atof(optarg);
-        log_str("c Additive constant is %lf\n", c);
-        break;
-      case 'C':
-        c_prime = atof(optarg);
-        log_str("c Alternative additive constant is %lf\n", c_prime);
-        break;
-      case 'd':
-        // Original DDFW paper settings
-        init_clause_weight = 8.0;
-        a = 1.0;
-        a_prime = 1.0;
-        c = -2.0;
-        c_prime = -1.0;
-        log_str("c Using original DDFW paper configurations, which are:\n");
-        log_str("c Multiplicative constants 1.0, additive -2.0 and -1.0\n");
-        break;
-      case 'f':
-        filename = optarg;
-        break;
-      case 'h':
-        print_help(argv[0]);
-        return 0;
-      case 'm':
-        switch (optarg[0]) {
-          case 'U':
-            selection_method = UNIFORM;
-            log_str("c Selection method is uniform distribution\n");
-            break;
-          case 'W':
-            selection_method = WEIGHTED;
-            log_str("c Selection method is weighted distribution\n");
-            break;
-          case 'B':
-            selection_method = BEST;
-            log_str("c Selection method is best\n");
-            break;
-          default:
-            selection_method = WEIGHTED;
-            log_str("c Unrecognized selection method, default is weighted\n");
-            break;
-        }
-        break;
-      case 'Q':
-        suppress_solution = 1; // Fallthrough
-      case 'q':
-        set_verbosity(SILENT);
-        break;
-      case 'r':
-        num_restarts = atoi(optarg);
-        log_str("c Will run the algorithm %d times\n", num_restarts);
-        break;
-      case 's':
-        seed = atoi(optarg);
-        if (seed != 0) {
-          log_str("c Using randomization seed %d\n", seed);
-          srand(seed);
-        }
-        break;
-      case 't':
-        timeout_secs = atoi(optarg);
-        log_str("c Timeout set to %d\n", timeout_secs);
-        break;
-      case 'T':
-        timeout_flips = atoi(optarg);
-        timeout_method = FLIPS;
-        log_str("c Timeout set to %d flips\n", timeout_flips);
-        break;
-      case 'v':
-        set_verbosity(VERBOSE);
-        break;
-      case 'w':
-        init_clause_weight = atof(optarg);
-        log_str("c Default clause weight set to %lf\n", init_clause_weight);
-        break;
-      default:
-        print_usage(argv[0]);
-    }
-  }
-
-  log_str("c ------------------------------------------------------------\n");
-  log_str("c          DDFW - Divide and Distribute Fixed Weights\n");
-  log_str("c                  Implemented by Cayden Codel\n");
-  log_str("c                          Version 0.1\n");
-  log_str("c ------------------------------------------------------------\n");
-
-  if (filename == NULL) {
-    fprintf(stderr, "c No filename provided, exiting.\n");
-    exit(1);
-  }
-
-  if (timeout_method == TIME) {
-    log_str("c Running with timeout of %d seconds\n", timeout_secs);
-  } else {
-    log_str("c Running with timeout of %d flips\n", timeout_flips);
-  }
-
-  switch (selection_method) {
-    case BEST:
-      log_str("c Running with selection method BEST\n");
-      break;
-    case UNIFORM:
-      log_str("c Running with selection method UNIFORM\n");
-      break;
-    case WEIGHTED:
-    default:
-      log_str("c Running with selection method WEIGHTED\n");
-      break;
-  }
-
-  if (seed == DEFAULT_SEED) {
-    log_str("c Using default randomization seed %d\n", seed);
-    srand(seed);
-  }
-
-  log_str("c All done parsing CLI args, opening file %s\n", filename);
-  parse_cnf_file(filename);
-
-#ifdef DEBUG
-  cost_reducing_idxs_copy = xmalloc((num_vars + 1) * sizeof(int));
-  cost_reducing_vars_copy = xmalloc(num_vars * sizeof(int));
-  cost_reducing_weights_copy = xmalloc(num_vars * sizeof(double));
-#endif
-
-  for (runs = 1; runs <= num_restarts; runs++) {
-    run_algorithm();
-    reset_data_structures();
-  }
-
-  return 0;
+  log_statistics(algorithm_run, &start_time, &stop_time);
 }

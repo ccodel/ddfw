@@ -5,14 +5,15 @@
 CC = gcc
 CFLAGS = -g -O3 -Wall -Werror -Wno-unused-function -Wno-unused-parameter -std=c99
 
-FILES = ddfw.o clause.o logger.o cnf_parser.o xmalloc.o
+FILES = main.o ddfw.o clause.o logger.o cnf_parser.o xmalloc.o
 
-ddfw: ddfw.o logger.o clause.o cnf_parser.o xmalloc.o
+ddfw: main.o ddfw.o logger.o clause.o cnf_parser.o xmalloc.o
 	$(CC) $(CFLAGS) -o ddfw $(FILES)
 
-verify: Dddfw.o logger.o clause.o cnf_parser.o xmalloc.o
+verify: main.o Dddfw.o logger.o clause.o cnf_parser.o xmalloc.o
 	$(CC) $(CFLAGS) -DDEBUG -o ddfw_verify $(FILES)
 
+main.o: main.c ddfw.o logger.o cnf_parser.o clause.o xmalloc.o
 ddfw.o: ddfw.c logger.o cnf_parser.o clause.o xmalloc.o
 logger.o: logger.c logger.h clause.o
 clause.o: clause.c clause.h xmalloc.o
