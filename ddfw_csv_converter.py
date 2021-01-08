@@ -118,11 +118,8 @@ if (len(solve) != runs):
     print(sys.argv[1] + ' claims ' + str(runs) + ' runs, but ' + str(len(solve)) + ' were found')
     sys.exit()
 
-print(len(solve))
-
 # For each run, print its data into the CSV file
 for i in range(0, len(solve)):
-    print(i)
     csv_file.write('{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14}\n'.format(
         instance_str, version, a, A, c, C, w, cpu_timeout, flip_timeout,
         seed, solve[i], flips[i], best[i], best_step[i], time[i]))
