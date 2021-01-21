@@ -147,8 +147,8 @@ int main(int argc, char *argv[]) {
   // Check that a weight change will *actually* have an effect, otherwise
   // the weight distribution is an identity, which just won't do
   double change_in_weight = (mult_a * init_clause_weight) + add_c;
-  if (ABS(change_in_weight - init_clause_weight) < 0.001) {
-    fprintf(stderr, "No change in weight if transfer, not testing\n");
+  if (change_in_weight - init_clause_weight >= -0.001) {
+    fprintf(stderr, "Weight transfer must be strictly negaive, not testing\n");
     return 0;
   }
   
