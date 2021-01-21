@@ -15,6 +15,11 @@
 #include "ddfw.h"
 #include "logger.h"
 
+/** Calculates the absolute value of the number passed in. */
+#ifndef ABS
+#define ABS(x)     (((x) < 0) ? -(x) : (x))
+#endif
+
 /** @brief Main function. Processes command-line arguments and kicks off DDFW.
  *
  *  @param argc  The number of arguments given on the command line.
@@ -138,6 +143,15 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "No input CNF filename provided\n");
     return 0;
   }
+
+  // Check that a weight change will *actually* have an effect, otherwise
+  // the weight distribution is an identity, which just won't do
+  double change_in_weight = (mult_a * init_clause_weight) + add_c;
+  if (ABS(change_in_weight - init_clause_weight) < 0.001) {
+    fprintf(stderr, "No change in weight if transfer, not testing\n");
+    return 0;
+  }
+  
 
   // All command-line arguments have been validated, proceed with setup
   // Print banner
