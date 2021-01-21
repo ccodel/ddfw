@@ -337,6 +337,20 @@ double add_C = DEFAULT_C;
  */
 int suppress_solution = 0;
 
+/** @brief The number of flips between logging weight statistics.
+ *
+ *  By default, weight statistics are not logged while DDFW is running. If the
+ *  -l <flips> option is specified at the command-line, then every <flips>
+ *  flips, the weight statistics are logged with a call to the function
+ *  log_weight_statistics().
+ */
+int weight_statistics_log_rate = 0;
+
+#define WEIGHT_TRANSFER_MEMORY  10
+static double transfer_weight_memory[WEIGHT_TRANSFER_MEMORY];
+static int transfer_weight_idx = 0;
+static int weight_transfer_count = 0;
+
 #ifdef DEBUG
 /** @brief Membership array data structure used for verifying the calculation
  *         of cost-reducing variables. Not included in normal compilation.
@@ -654,6 +668,17 @@ static inline void transfer_weight(const int from_idx, const int to_idx) {
   // Whatever weight was taken away is given to the unsat clause
   double diff = orig - clause_weights[from_idx];
   clause_weights[to_idx] += diff;
+  unsat_clause_weight += diff;
+
+  // Store diff in the memory, if the rate is positive
+  if (weight_statistics_log_rate > 0) {
+    weight_transfer_count++;
+    transfer_weight_memory[transfer_weight_idx] = diff;
+    transfer_weight_idx++;
+    if (transfer_weight_idx == WEIGHT_TRANSFER_MEMORY) {
+      transfer_weight_idx = 0;
+    }
+  }
 
   // Since the "from" clause is satisfied, only the satisfied literal inside
   //   must have its cost-reducing status re-computed
@@ -740,13 +765,23 @@ static void distribute_weights() {
 
     /*
      * If we don't have a max-weight neighbor, then select a random sat clause
-     * with weight at least init_clause_weight
+     * with weight at least init_clause_weight.
+     *
+     * For reasons that are yet unknown to the author (probably in cases where
+     * the weight transferral *adds* weight to satisfied clauses), then this
+     * loop may not terminate. As such, a counter is set to be 100 times the
+     * number of clauses. If the counter is reached, then the last neighbor
+     * selected is used, just to prevent infinite loops.
      */
+    int loop_counter = 0;
+    int loop_stop = 100 * num_clauses;
     if (max_neighbor_idx == -1) {
       do {
         max_neighbor_idx = ((unsigned int) rand()) % num_clauses;
-      } while (clause_num_true_lits[max_neighbor_idx] == 0 || 
-          clause_weights[max_neighbor_idx] < init_clause_weight);
+        loop_counter++;
+      } while ((clause_num_true_lits[max_neighbor_idx] == 0 || 
+          clause_weights[max_neighbor_idx] < init_clause_weight) &&
+          loop_counter < loop_stop);
     }
 
     transfer_weight(max_neighbor_idx, c_idx);
@@ -768,6 +803,11 @@ void run_ddfw_algorithm() {
 #endif
 
   generate_random_assignment();
+
+  // Wipe the number of weight transferrals
+  memset(transfer_weight_memory, 0, sizeof(double) * WEIGHT_TRANSFER_MEMORY);
+  transfer_weight_idx = 0;
+  weight_transfer_count = 0;
 
   // Record the time to ensure no timeout
   int timeout_loop_counter = LOOPS_PER_TIMEOUT_CHECK;
@@ -826,10 +866,23 @@ void run_ddfw_algorithm() {
       var_to_flip = ((unsigned int) rand()) % num_vars;
     } else {
       distribute_weights();
-      continue;
+      goto check_timeout;
     }
 
     flip_variable(var_to_flip);
+
+    // Log in-run statistics if the rate is reached
+    if (weight_statistics_log_rate > 0 && 
+        num_flips % weight_statistics_log_rate == 0) {
+      // Calculate average
+      double average = 0.0;
+      for (int i = 0; i < WEIGHT_TRANSFER_MEMORY; i++) {
+        average += transfer_weight_memory[i];
+      }
+      average /= WEIGHT_TRANSFER_MEMORY;
+
+      log_weight_statistics(algorithm_run, weight_transfer_count, average);
+    }
 
     // Determine if enough flips/loops have passed to update time variable
     if ((timeout_method == FLIPS || timeout_method == BOTH) 
@@ -837,6 +890,7 @@ void run_ddfw_algorithm() {
       break;
     }
 
+check_timeout:
     if (timeout_method != FLIPS) {
       timeout_loop_counter--;
       if (timeout_loop_counter == 0) {

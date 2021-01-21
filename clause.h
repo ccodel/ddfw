@@ -139,6 +139,7 @@ extern int num_vars;
 extern int num_literals;
 extern int num_clauses;
 extern double init_clause_weight;
+extern double unsat_clause_weight;
 
 // Statistics
 extern int num_restarts;

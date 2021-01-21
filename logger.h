@@ -51,6 +51,7 @@ void log_err(const char *format, ...);
 void log_weights();
 void log_reducing_cost_lits();
 
+void log_weight_statistics(int run, int transfers, double weight_transfer_avg);
 void log_statistics(int run, struct timeval *start, struct timeval *stop);
 
 void log_assignment();

@@ -31,6 +31,7 @@ For an up-to-date listing of the executable options, type `./ddfw -h` for a help
   -d
   -f <filename>
   -h
+  -l <flips>
   -m <method>
   -q
   -r <runs>
@@ -67,6 +68,11 @@ Specify a path to a CNF file. The file does not need to end in `.cnf`, but does 
 
 #### The -h option
 Including the `-h` option displays a help message and ends execution, regardless of however many other options are specified.
+
+#### The -l option
+In-run statistics regarding weight transfer can be logged. Supplying a `-l`
+option will cause those statistics to be logged every `<flips>` flips. If the
+`-l` option is not provided, then no in-run statistics are logged.
 
 #### The -m option
 By default, method is WEIGHTED.

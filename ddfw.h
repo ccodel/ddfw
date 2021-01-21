@@ -55,6 +55,7 @@ extern double mult_A;
 extern double add_c;
 extern double add_C;
 extern int suppress_solution;
+extern int weight_statistics_log_rate;
 
 void run_ddfw_algorithm();
 

@@ -32,7 +32,7 @@ int main(int argc, char *argv[]) {
   char *filename = NULL;
   extern char *optarg;
   char opt;
-  while ((opt = getopt(argc, argv, "dhvqQa:A:c:C:f:m:r:s:t:T:w:")) != -1) {
+  while ((opt = getopt(argc, argv, "dhvqQa:A:c:C:f:l:m:r:s:t:T:w:")) != -1) {
     switch (opt) {
       case 'a': ao = 1; mult_a = atof(optarg); break;
       case 'A': Ao = 1; mult_A = atof(optarg); break;
@@ -41,6 +41,13 @@ int main(int argc, char *argv[]) {
       case 'd': d = 1;                         break;
       case 'f': filename = optarg;             break;
       case 'h': print_help(argv[0]);           return 0;
+      case 'l':
+        weight_statistics_log_rate = atoi(optarg);
+        if (weight_statistics_log_rate <= 0) {
+          fprintf(stderr, "Weight log rate must be strictly positive\n");
+          return 0;
+        }
+        break;
       case 'm':
         switch (optarg[0]) {
           case 'U':

@@ -70,6 +70,7 @@ void print_help(char *runtime_path) {
   printf("  -d                  Use DDFW original paper settings.\n");
   printf("  -f <filename>       Provide a .cnf file.\n");
   printf("  -h                  Display this help message.\n");
+  printf("  -l <flips>          Log weight transfer statistics every flips\n");
   printf("  -m <method>         Selection method");
   printf(" ([U]niform, [W]eighted, [B]est)\n");
   printf("  -q                  Quiet mode, only prints settings and stats.\n");
@@ -292,6 +293,24 @@ void log_reducing_cost_lits() {
     }
   }
   */
+}
+
+
+/** @brief Logs common statistics for weight distribution for in-run logging.
+ *
+ *  Prints the number of flips, current number of unsat clauses, best number
+ *  of unsat clauses found so far, weight held by 
+ *  
+ *  @param run                  Run number.
+ *  @param weight_transfer_avg  The average weight passed in the last few.
+ *
+ */
+void log_weight_statistics(int run, int transfers, double weight_transfer_avg) {
+  // run | flips | transfers | curr_unsat_count | 
+  // best_unsat_count | unsat_weight | avg
+  printf("c In-stats: %d | %ld | %d | %d | %d | %.3f | %.3f\n",
+      run, num_flips, transfers, num_unsat_clauses, lowest_unsat_clauses, 
+      unsat_clause_weight, weight_transfer_avg);
 }
 
 /** @brief Logs common statistics collected throughout the algorithm.

@@ -34,6 +34,7 @@ int num_vars = 0;
 int num_literals = 0;
 int num_clauses = 0;
 double init_clause_weight = DEFAULT_CLAUSE_WEIGHT;
+double unsat_clause_weight = 0.0;
 
 // Statistics
 int num_restarts = 1;
@@ -92,6 +93,7 @@ static inline void add_false_clause(int c_idx) {
     false_clause_indexes[c_idx] = num_unsat_clauses;
     false_clause_members[num_unsat_clauses] = c_idx;
     num_unsat_clauses++;
+    unsat_clause_weight += clause_weights[c_idx];
   }
 }
 
@@ -108,6 +110,7 @@ static inline void remove_false_clause(int c_idx) {
     }
     
     false_clause_indexes[c_idx] = -1;
+    unsat_clause_weight -= clause_weights[c_idx];
   }
 }
 
@@ -340,6 +343,8 @@ void reset_data_structures() {
  */
 void generate_random_assignment() {
   log_str("c Randomizing assignment\n");
+
+  unsat_clause_weight = 0.0;
 
   // Give random bits to assignment
   // TODO cast to int* for BITS_IN_BYTE fewer calls to rand()
