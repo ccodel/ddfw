@@ -346,7 +346,7 @@ int suppress_solution = 0;
  */
 int weight_statistics_log_rate = 0;
 
-#define WEIGHT_TRANSFER_MEMORY  10
+#define WEIGHT_TRANSFER_MEMORY  1000
 static double transfer_weight_memory[WEIGHT_TRANSFER_MEMORY];
 static int transfer_weight_idx = 0;
 static int weight_transfer_count = 0;

@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
 
 #include "logger.h"
 #include "clause.h"
@@ -307,10 +308,36 @@ void log_reducing_cost_lits() {
  */
 void log_weight_statistics(int run, int transfers, double weight_transfer_avg) {
   // run | flips | transfers | curr_unsat_count | 
-  // best_unsat_count | unsat_weight | avg
-  printf("c In-stats: %d | %ld | %d | %d | %d | %.3f | %.3f\n",
+  // best_unsat_count | unsat_weight | avg | min_unsat | max_unsat | min_sat | max_sat
+  double min_unsat, min_sat, max_unsat, max_sat;
+  min_unsat = min_sat = INT_MAX;
+  max_unsat = max_sat = INT_MIN;
+  int *num_true_lits = clause_num_true_lits;
+  double *weights = clause_weights;
+  for (int i = 0; i < num_clauses; i++) {
+    double w = *weights;
+    if (*num_true_lits == 0) {
+      if (w > max_unsat) {
+        max_unsat = w;
+      } else if (w < min_unsat) {
+        min_unsat = w;
+      }
+    } else {
+      if (w > max_sat) {
+        max_sat = w;
+      } else if (w < min_sat) {
+        min_sat = w;
+      }
+    }
+
+    num_true_lits++;
+    weights++;
+  }
+
+  printf("c In-stats: %d | %ld | %d | %d | %d | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f\n",
       run, num_flips, transfers, num_unsat_clauses, lowest_unsat_clauses, 
-      unsat_clause_weight, weight_transfer_avg);
+      unsat_clause_weight, weight_transfer_avg,
+      min_unsat, max_unsat, min_sat, max_sat);
 }
 
 /** @brief Logs common statistics collected throughout the algorithm.
