@@ -151,7 +151,7 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Weight transfer must be strictly negaive, not testing\n");
     return 0;
   }
-  
+
 
   // All command-line arguments have been validated, proceed with setup
   // Print banner
@@ -169,6 +169,20 @@ int main(int argc, char *argv[]) {
   log_str("c  -A %lf\n", mult_A);
   log_str("c  -c %lf\n", add_c);
   log_str("c  -C %lf\n", add_C);
+  switch (selection_method) {
+    case UNIFORM:
+      log_str("c  -m UNIFORM\n");
+      break;
+    case WEIGHTED:
+      log_str("c  -m WEIGHTED\n");
+      break;
+    case BEST:
+      log_str("c  -m BEST\n");
+      break;
+    default:
+      fprintf(stderr, "Unknown selection method\n");
+      return 0;
+  }
   log_str("c  -r %d\n", num_restarts);
   switch (timeout_method) {
     case DEFAULT:
