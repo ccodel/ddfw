@@ -346,6 +346,11 @@ int suppress_solution = 0;
  */
 int weight_statistics_log_rate = 0;
 
+// Additional options for weight transfer rules
+transfer_group_t transfer_grp = SINGULAR;
+rule_group_t rule_grp = RULE_SINGULAR;
+available_weight_option_t available_weight_opt = RAW;
+
 #define WEIGHT_TRANSFER_MEMORY  1000
 static double transfer_weight_memory[WEIGHT_TRANSFER_MEMORY];
 static int transfer_weight_idx = 0;
@@ -644,6 +649,26 @@ static void find_cost_reducing_literals() {
 #endif
 }
 
+static double inline calc_weight_to_transfer(int c_idx) {
+  double w = clause_weights[c_idx];
+  switch (available_weight_opt) {
+    case RAW:
+      if (w <= init_clause_weight) {
+        return mult_A * w + add_C;
+      } else {
+        return mult_a * w + add_c;
+      }
+    case MINUS_INIT:
+      if (w <= init_clause_weight) {
+        return mult_A * w + add_C - init_clause_weight;
+      } else {
+        return mult_A * w + add_c - init_clause_weight;
+      }
+    default:
+      fprintf(stderr, "Unrecognized option\n"); exit(-1);
+  }
+}
+
 /** @brief Transfers weight from a neighboring satisfied clause to an
  *         unsatisfied clause when no more cost-reducing variables exist.
  *
@@ -654,26 +679,21 @@ static void find_cost_reducing_literals() {
  *
  *  @param from_idx The clause index that weight is taken from.
  *  @param to_idx   The clause index that weight is given to.
+ *  @param w        The amount of weight to transfer. Note that not enough
+ *                  weight exists for a transfer, the transfer does not
+ *                  take place. (TODO does this result in deadlock?)
  */
-static inline void transfer_weight(const int from_idx, const int to_idx) {
-  double orig = clause_weights[from_idx];
-  if (orig < init_clause_weight) {
-    clause_weights[from_idx] *= mult_A;
-    clause_weights[from_idx] += add_C;
-  } else {
-    clause_weights[from_idx] *= mult_a;
-    clause_weights[from_idx] += add_c;
-  }
+static void transfer_weight(int from_idx, int to_idx, double w) {
+  // Abort if there isn't enough weight for a transfer - weights are positive!
+  if (clause_weights[from_idx] < w) return;
 
-  // Whatever weight was taken away is given to the unsat clause
-  double diff = orig - clause_weights[from_idx];
-  clause_weights[to_idx] += diff;
-  unsat_clause_weight += diff;
+  clause_weights[from_idx] -= w;
+  clause_weights[to_idx] += w;
 
   // Store diff in the memory, if the rate is positive
   if (weight_statistics_log_rate > 0) {
     weight_transfer_count++;
-    transfer_weight_memory[transfer_weight_idx] = diff;
+    transfer_weight_memory[transfer_weight_idx] = w;
     transfer_weight_idx++;
     if (transfer_weight_idx == WEIGHT_TRANSFER_MEMORY) {
       transfer_weight_idx = 0;
@@ -697,6 +717,201 @@ static inline void transfer_weight(const int from_idx, const int to_idx) {
   }
 }
 
+
+static void distribute_singular(const int c_idx) {
+  const int size = clause_sizes[c_idx];
+  int *cl_lits = clause_literals[c_idx];
+
+  // Look for satisfied neighbor with greatest weight
+  int max_neighbor_idx = -1;
+  double max_neighbor_weight = -1; // No positive weights allowed, so this is ok
+
+  // Loop over literals in the clause to look at neighbors of those lits
+  for (int l = 0; l < size; l++) {
+    const int l_idx = *cl_lits;
+    const int occ = literal_occ[l_idx];
+
+    // For each literal, search neighbors for a satisfied clause
+    int *l_clauses = literal_clauses[l_idx];
+    for (int cn = 0; cn < occ; cn++) {
+      const int cn_idx = *l_clauses;
+      if (clause_num_true_lits[cn_idx] > 0 
+          && clause_weights[cn_idx] > max_neighbor_weight) {
+        max_neighbor_idx = cn_idx;
+        max_neighbor_weight = clause_weights[cn_idx];
+      }
+      l_clauses++; // Move to the next clause index for this literal
+    }
+    cl_lits++; // Move to the next literal in this clause
+  }
+
+  /* While not mentioned in the original DDFW paper, it was found in
+   * the original authors' code: if the maximum weight neighbor is not
+   * at least the initial weight (or with some small probability), look
+   * for a random satisfied clause instead.
+   */
+  if (max_neighbor_idx != -1) {
+    if (max_neighbor_weight < init_clause_weight ||
+        ((unsigned int) rand()) % RAND_NEIGH_DEN < RAND_NEIGH_NUM) {
+      max_neighbor_idx = -1;
+    }
+  }
+
+
+  /* If we don't yet have a max-weight neighbor, select a random
+   * satisfied clause with at least initial weight. A counter is
+   * implemented to prevent infinite loops.
+   */
+  int loop_counter = 0;
+  int loop_stop = 100 * num_clauses;
+  if (max_neighbor_idx == -1) {
+    do {
+      max_neighbor_idx = ((unsigned int) rand()) % num_clauses;
+      loop_counter++;
+    } while ((clause_num_true_lits[max_neighbor_idx] == 0 ||
+          clause_weights[max_neighbor_idx] < init_clause_weight) &&
+        loop_counter < loop_stop);
+  }
+
+  transfer_weight(max_neighbor_idx, c_idx, calc_weight_to_transfer(c_idx));
+}
+
+
+static void distribute_above_init(const int c_idx) {
+  const int size = clause_sizes[c_idx];
+  int *cl_lits = clause_literals[c_idx];
+
+  // Loop over the literals, looking for neighbors
+  for (int l = 0; l < size; l++) {
+    const int l_idx = *cl_lits;
+    const int occ = literal_occ[l_idx];
+    double weight_sum = 0;
+
+    // For each literal, search neighbors for all satisfied clauses above winit
+    int *l_clauses = literal_clauses[l_idx];
+    for (int cn = 0; cn < occ; cn++) {
+      const int cn_idx = *l_clauses;
+      const double cw = clause_weights[cn_idx];
+      if (clause_num_true_lits[cn_idx] > 0 && cw >= init_clause_weight) {
+        switch (rule_grp) {
+          case RULE_SINGULAR:
+            // Apply the rule immediately
+            transfer_weight(cn_idx, c_idx, calc_weight_to_transfer(cn_idx));
+            break;
+          case RULE_SUM:
+          case RULE_AVG:
+            if (available_weight_opt == MINUS_INIT) {
+              weight_sum += cw - init_clause_weight;
+            } else {
+              weight_sum += cw;
+            }
+            break;
+          default:
+            fprintf(stderr, "Unrecognized rule group\n"); exit(-1);
+        }
+      }
+      l_clauses++;
+    }
+
+    // Now we may have to loop again to distribute proportional weights
+    if (rule_grp == RULE_SUM || rule_grp == RULE_AVG) {
+      // Calculate how much weight we have to work with
+      double wtt;
+      if (weight_sum <= init_clause_weight) {
+        wtt = mult_A * weight_sum + add_C;
+      } else {
+        wtt = mult_a * weight_sum + add_c;
+      }
+
+      // Now loop through and find neighbors to transfer from
+      int *l_clauses = literal_clauses[l_idx];
+      for (int cn = 0; cn < occ; cn++) {
+        const int cn_idx = *l_clauses;
+        const double cw = clause_weights[cn_idx];
+        if (clause_num_true_lits[cn_idx] > 0 && cw >= init_clause_weight) {
+          if (rule_grp == RULE_SUM) {
+            double prop = cw / weight_sum;
+            transfer_weight(cn_idx, c_idx, prop * wtt);
+          } else {
+            transfer_weight(cn_idx, c_idx, wtt);
+          }
+        }
+
+        l_clauses++;
+      }
+    }
+
+    cl_lits++;
+  }
+}
+
+static void distribute_all(const int c_idx) {
+  const int size = clause_sizes[c_idx];
+  int *cl_lits = clause_literals[c_idx];
+
+  // Loop over the literals, looking for neighbors
+  for (int l = 0; l < size; l++) {
+    const int l_idx = *cl_lits;
+    const int occ = literal_occ[l_idx];
+    double weight_sum = 0;
+
+    // For each literal, search neighbors for all satisfied clauses above winit
+    int *l_clauses = literal_clauses[l_idx];
+    for (int cn = 0; cn < occ; cn++) {
+      const int cn_idx = *l_clauses;
+      const double cw = clause_weights[cn_idx];
+      if (clause_num_true_lits[cn_idx] > 0) {
+        switch (rule_grp) {
+          case RULE_SINGULAR:
+            // Apply the rule immediately
+            transfer_weight(cn_idx, c_idx, calc_weight_to_transfer(cn_idx));
+            break;
+          case RULE_SUM:
+          case RULE_AVG:
+            if (available_weight_opt == MINUS_INIT) {
+              weight_sum += cw - init_clause_weight;
+            } else {
+              weight_sum += cw;
+            }
+            break;
+          default:
+            fprintf(stderr, "Unrecognized rule group\n"); exit(-1);
+        }
+      }
+      l_clauses++;
+    }
+
+    // Now we may have to loop again to distribute proportional weights
+    if (rule_grp == RULE_SUM || rule_grp == RULE_AVG) {
+      // Calculate how much weight we have to work with
+      double wtt;
+      if (weight_sum <= init_clause_weight) {
+        wtt = mult_A * weight_sum + add_C;
+      } else {
+        wtt = mult_a * weight_sum + add_c;
+      }
+
+      // Now loop through and find neighbors to transfer from
+      int *l_clauses = literal_clauses[l_idx];
+      for (int cn = 0; cn < occ; cn++) {
+        const int cn_idx = *l_clauses;
+        if (clause_num_true_lits[cn_idx] > 0) {
+          if (rule_grp == RULE_SUM) {
+            double prop = clause_weights[cn_idx] / weight_sum;
+            transfer_weight(cn_idx, c_idx, prop * wtt);
+          } else {
+            transfer_weight(cn_idx, c_idx, wtt);
+          }
+        }
+
+        l_clauses++;
+      }
+    }
+
+    cl_lits++;
+  }
+}
+
 /** @brief Distribute weights from satisfied to unsatisfied clauses.
  *  
  *  In the case where no literals may be flipped to decrease the weight
@@ -715,76 +930,25 @@ static inline void transfer_weight(const int from_idx, const int to_idx) {
  *  second set is used instead.
  */
 static void distribute_weights() {
-  // Loop over all clauses, picking out those that are false
+  // Loop over all false clauses
   const int uc = num_unsat_clauses;
   int *false_clauses = false_clause_members;
   for (int c = 0; c < uc; c++) {
     const int c_idx = *false_clauses;
-    const int size = clause_sizes[c_idx];
-
-    // Scan for any neighboring clause that is satisfied and has max weight
-    int max_neighbor_idx = -1;
-    double max_neighbor_weight = -100000;
-
-    // Loop over the literals in the clause to search for neighboring sat clause
-    int *cl_lits = clause_literals[c_idx];
-    for (int l = 0; l < size; l++) {
-      const int l_idx = *cl_lits;
-      const int occ = literal_occ[l_idx];
-
-      // For each literal, search neighbors for a satisfied clause
-      int *l_clauses = literal_clauses[l_idx];
-      for (int cn = 0; cn < occ; cn++) {
-        const int cn_idx = *l_clauses;
-        if (clause_num_true_lits[cn_idx] > 0 
-            && clause_weights[cn_idx] > max_neighbor_weight) {
-          max_neighbor_idx = cn_idx;
-          max_neighbor_weight = clause_weights[cn_idx];
-        }
-
-        // Move to the next clause index for this literal
-        l_clauses++;
-      }
-
-      // Move to the next literal in this clause
-      cl_lits++;
+    switch (transfer_grp) {
+      case SINGULAR:
+        distribute_singular(c_idx);
+        break;
+      case ABOVE_INIT:
+        distribute_above_init(c_idx);
+        break;
+      case ALL:
+        distribute_all(c_idx);
+        break;
+      default:
+        fprintf(stderr, "Unrecognized transfer group\n"); exit(-1);
     }
 
-    /* 
-     * While not mentioned in the original DDFW paper, it was in the code...
-     * If a maximum weight neighbor has been found for this clause, then
-     * erase the neighbor index if the weight isn't high enough or with
-     * some small probability
-     */
-    if (max_neighbor_idx != -1) {
-      if (max_neighbor_weight < init_clause_weight ||
-          ((unsigned int) rand()) % RAND_NEIGH_DEN < RAND_NEIGH_NUM) {
-        max_neighbor_idx = -1;
-      }
-    }
-
-    /*
-     * If we don't have a max-weight neighbor, then select a random sat clause
-     * with weight at least init_clause_weight.
-     *
-     * For reasons that are yet unknown to the author (probably in cases where
-     * the weight transferral *adds* weight to satisfied clauses), then this
-     * loop may not terminate. As such, a counter is set to be 100 times the
-     * number of clauses. If the counter is reached, then the last neighbor
-     * selected is used, just to prevent infinite loops.
-     */
-    int loop_counter = 0;
-    int loop_stop = 100 * num_clauses;
-    if (max_neighbor_idx == -1) {
-      do {
-        max_neighbor_idx = ((unsigned int) rand()) % num_clauses;
-        loop_counter++;
-      } while ((clause_num_true_lits[max_neighbor_idx] == 0 || 
-          clause_weights[max_neighbor_idx] < init_clause_weight) &&
-          loop_counter < loop_stop);
-    }
-
-    transfer_weight(max_neighbor_idx, c_idx);
     false_clauses++; // Next false clause in the array
   }
 }

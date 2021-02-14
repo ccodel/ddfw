@@ -247,7 +247,7 @@ void initialize_clause(int clause_idx, int size, int *lit_idxs) {
  *
  *  @return void, but calls exit(-1) on memory allocation failure.
  */
-void process_clauses() {
+void process_clauses(void) {
   // Alias variables
   const int nc = num_clauses;
   int *sizes = clause_sizes;
@@ -287,7 +287,7 @@ void process_clauses() {
 /** @brief Resets the various data structures in use by clause.c
  *         so the algorithm can run again on the same CNF file.
  */
-void reset_data_structures() {
+void reset_data_structures(void) {
   num_flips = 0;
   lowest_unsat_clauses = num_clauses;
   lowest_unsat_step = 0;
@@ -341,7 +341,7 @@ void reset_data_structures() {
  *     determine which literal is the last one keeping a clause true in
  *     the case that clause->sat_lits is 1.
  */
-void generate_random_assignment() {
+void generate_random_assignment(void) {
   log_str("c Randomizing assignment\n");
 
   unsat_clause_weight = 0.0;

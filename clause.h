@@ -186,11 +186,11 @@ void remove_cost_compute_var(const int v_idx); // Helper
 // Functions
 void initialize_formula(int num_cs, int num_vs);
 void initialize_clause(int clause_idx, int size, int *lit_idxs);
-void process_clauses();
+void process_clauses(void);
 
-void reset_data_structures();
+void reset_data_structures(void);
 
-void generate_random_assignment();
+void generate_random_assignment(void);
 void flip_variable(const int var_idx);
 
 #endif /* _CLAUSE_H_ */

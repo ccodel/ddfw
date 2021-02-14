@@ -37,7 +37,8 @@ int main(int argc, char *argv[]) {
   char *filename = NULL;
   extern char *optarg;
   char opt;
-  while ((opt = getopt(argc, argv, "dhvqQa:A:c:C:f:l:m:r:s:t:T:w:")) != -1) {
+  while ((opt = getopt(argc, argv, 
+          "dhvqQa:A:c:C:f:g:G:l:m:o:r:s:t:T:w:")) != -1) {
     switch (opt) {
       case 'a': ao = 1; mult_a = atof(optarg); break;
       case 'A': Ao = 1; mult_A = atof(optarg); break;
@@ -53,24 +54,55 @@ int main(int argc, char *argv[]) {
           return 0;
         }
         break;
+      case 'g':
+        switch (optarg[0]) {
+          case 0:
+            transfer_grp = SINGULAR;           break;
+          case 1:
+            transfer_grp = ABOVE_INIT;         break;
+          case 2:
+            transfer_grp = ALL;                break;
+          default:
+            fprintf(stderr, "Unrecognized transfer group\n");
+            return 0;
+        }
+      case 'G':
+        switch (optarg[0]) {
+          case 0:
+            rule_grp = RULE_SINGULAR;          break;
+          case 1:
+            rule_grp = RULE_SUM;               break;
+          case 2:
+            rule_grp = RULE_AVG;               break;
+          default:
+            fprintf(stderr, "Unrecognized rule group\n");
+            return 0;
+        }
       case 'm':
         switch (optarg[0]) {
           case 'U':
-            selection_method = UNIFORM;
-            break;
+            selection_method = UNIFORM;        break;
           case 'W':
-            selection_method = WEIGHTED;
-            break;
+            selection_method = WEIGHTED;       break;
           case 'B':
-            selection_method = BEST;
-            break;
+            selection_method = BEST;           break;
           default:
             fprintf(stderr, "Unrecognized variable selection method\n");
             return 0;
         }
         break;
-      case 'q': q = 1; break;
-      case 'Q': Q = 1; break;
+      case 'o':
+        switch (optarg[0]) {
+          case 0:
+            available_weight_opt = RAW;        break;
+          case 1:
+            available_weight_opt = MINUS_INIT; break;
+          default:
+            fprintf(stderr, "Unrecognized available weight opt\n");
+            return 0;
+        }
+      case 'q': q = 1;                         break;
+      case 'Q': Q = 1;                         break;
       case 'r':
         num_restarts = atoi(optarg);
         if (num_restarts < 1) {
@@ -79,7 +111,7 @@ int main(int argc, char *argv[]) {
         }
         break;
       case 's':
-        seed = atoi(optarg); break;
+        seed = atoi(optarg);                   break;
       case 't':
         timeout_secs = atoi(optarg);
         if (timeout_secs < 1) {
@@ -106,7 +138,7 @@ int main(int argc, char *argv[]) {
           timeout_method = BOTH;
         }
         break;
-      case 'v': v = 1; break;
+      case 'v': v = 1;                         break;
       case 'w':
         w = 1;
         init_clause_weight = atof(optarg);
@@ -169,20 +201,53 @@ int main(int argc, char *argv[]) {
   log_str("c  -A %lf\n", mult_A);
   log_str("c  -c %lf\n", add_c);
   log_str("c  -C %lf\n", add_C);
+
+  switch (transfer_grp) {
+    case SINGULAR:
+      log_str("c  -g SINGULAR\n");             break;
+    case ABOVE_INIT:
+      log_str("c  -g ABOVE_INIT\n");           break;
+    case ALL:
+      log_str("c  -g ALL\n");                  break;
+    default:
+      fprintf(stderr, "Unknown transfer group\n");
+      return 0;
+  }
+
+  switch (rule_grp) {
+    case RULE_SINGULAR:
+      log_str("c  -G RULE_SINGULAR\n");        break;
+    case RULE_SUM:
+      log_str("c  -G RULE_SUM\n");             break;
+    case RULE_AVG:
+      log_str("c  -G RULE_AVG\n");             break;
+    default:
+      fprintf(stderr, "Unknown rule group\n");
+      return 0;
+  }
+
   switch (selection_method) {
     case UNIFORM:
-      log_str("c  -m UNIFORM\n");
-      break;
+      log_str("c  -m UNIFORM\n");              break;
     case WEIGHTED:
-      log_str("c  -m WEIGHTED\n");
-      break;
+      log_str("c  -m WEIGHTED\n");             break;
     case BEST:
-      log_str("c  -m BEST\n");
-      break;
+      log_str("c  -m BEST\n");                 break;
     default:
       fprintf(stderr, "Unknown selection method\n");
       return 0;
   }
+
+  switch (available_weight_opt) {
+    case RAW:
+      log_str("c  -o RAW\n");                  break;
+    case MINUS_INIT:
+      log_str("c  -o MINUS_INIT\n");           break;
+    default:
+      fprintf(stderr, "Unknown available weight opt\n");
+      return 0;
+  }
+
   log_str("c  -r %d\n", num_restarts);
   switch (timeout_method) {
     case DEFAULT:

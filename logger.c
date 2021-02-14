@@ -45,7 +45,7 @@
 static verbose_t vlevel = NORMAL;
 
 /** @brief Emits an error message and exits. */
-static void unrecognized_verbosity_level() {
+static void unrecognized_verbosity_level(void) {
   printf("c ERROR: UNRECOGNIZED VERBOSITY LEVEL, EXITING...\n");
   exit(-1);
 }
@@ -62,18 +62,21 @@ void print_help(char *runtime_path) {
   printf("\n%s: Divide and Distribute Fixed Weights\n\n", runtime_path);
   printf("  -a <double>         Provide");
   printf(" a multiplicative constant for weight distribution.\n");
-  printf("  -c <double>         Provide");
-  printf(" an additive constant for weight distribution.\n");
   printf("  -A <double>         Provide");
   printf(" a multiplicative constant for WD under W_init.\n");
-  printf("  -C <double>         Provide");
+  printf("  -c <double>         Provide");
+  printf(" an additive constant for weight distribution.\n");
+    printf("  -C <double>         Provide");
   printf(" an additive constant for WD under W_init.\n");
   printf("  -d                  Use DDFW original paper settings.\n");
   printf("  -f <filename>       Provide a .cnf file.\n");
+  printf("  -g <group_num>      Transfer group (0=SING, 1=ABOVE, 2=ALL)\n");
+  printf("  -G <group_num>      Rule group (0=SING, 1=SUM, 2=AVG)\n");
   printf("  -h                  Display this help message.\n");
   printf("  -l <flips>          Log weight transfer statistics every flips\n");
   printf("  -m <method>         Selection method");
   printf(" ([U]niform, [W]eighted, [B]est)\n");
+  printf("  -o <option_num>     Available weight option (0=RAW, 1=MINUS)\n");
   printf("  -q                  Quiet mode, only prints settings and stats.\n");
   printf("  -Q                  Quiet mode, supresses solution, if found.\n");
   printf("  -r <runs>           Provide an optional number of runs\n");
@@ -113,7 +116,7 @@ void print_usage(char *runtime_path) {
  *
  *  @return The logger's current verbosity level.
  */
-verbose_t get_verbosity() {
+verbose_t get_verbosity(void) {
   return vlevel;
 }
 
@@ -226,7 +229,7 @@ void log_err(const char *format, ...) {
 /** @brief Logs the weights associated with each clause.
  *
  */
-void log_weights() {
+void log_weights(void) {
   if (vlevel == SILENT)
     return;
 
@@ -245,7 +248,7 @@ void log_weights() {
  *  If verbosity level is set to VERBOSE, then more information is
  *  output, such as how the calculation was made.
  */
-void log_reducing_cost_lits() {
+void log_reducing_cost_lits(void) {
   if (vlevel == SILENT)
     return;
 
@@ -360,7 +363,7 @@ void log_statistics(int run, struct timeval *start, struct timeval *stop) {
  *  The logged output prints the assignment in a grid 50 variables wide.
  *  Guiding numbers appear at the top and sides to help grid readability.
  */
-void log_assignment() {
+void log_assignment(void) {
   switch (vlevel) {
     case SILENT:
       return;
@@ -394,7 +397,7 @@ void log_assignment() {
  *  Outputs assignment with 15 variables per line.
  *  TODO better formatting later
  */
-void output_assignment() {
+void output_assignment(void) {
   if (num_unsat_clauses != 0) {
     printf("s UNSATISFIABLE\n");
   } else {

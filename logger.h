@@ -39,7 +39,7 @@ void print_usage(char *runtime_path);
 
 /** -- Logging functions: print to stdout, according to verbosity level. -- */
 
-verbose_t get_verbosity();
+verbose_t get_verbosity(void);
 void set_verbosity(verbose_t verbosity_level);
 
 void log_clause(int c_idx);
@@ -48,13 +48,13 @@ void log_str(const char *format, ...);
 void log_err(const char *format, ...);
 
 /** Loop information */
-void log_weights();
-void log_reducing_cost_lits();
+void log_weights(void);
+void log_reducing_cost_lits(void);
 
 void log_weight_statistics(int run, int transfers, double weight_transfer_avg);
 void log_statistics(int run, struct timeval *start, struct timeval *stop);
 
-void log_assignment();
-void output_assignment();
+void log_assignment(void);
+void output_assignment(void);
 
 #endif /* _LOGGER_H_ */
