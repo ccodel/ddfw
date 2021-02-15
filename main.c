@@ -55,7 +55,7 @@ int main(int argc, char *argv[]) {
         }
         break;
       case 'g':
-        switch (optarg[0]) {
+        switch (atoi(optarg)) {
           case 0:
             transfer_grp = SINGULAR;           break;
           case 1:
@@ -66,8 +66,9 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Unrecognized transfer group\n");
             return 0;
         }
+        break;
       case 'G':
-        switch (optarg[0]) {
+        switch (atoi(optarg)) {
           case 0:
             rule_grp = RULE_SINGULAR;          break;
           case 1:
@@ -78,6 +79,7 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Unrecognized rule group\n");
             return 0;
         }
+        break;
       case 'm':
         switch (optarg[0]) {
           case 'U':
@@ -92,7 +94,7 @@ int main(int argc, char *argv[]) {
         }
         break;
       case 'o':
-        switch (optarg[0]) {
+        switch (atoi(optarg)) {
           case 0:
             available_weight_opt = RAW;        break;
           case 1:
@@ -101,6 +103,7 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Unrecognized available weight opt\n");
             return 0;
         }
+        break;
       case 'q': q = 1;                         break;
       case 'Q': Q = 1;                         break;
       case 'r':
