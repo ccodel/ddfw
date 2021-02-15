@@ -654,15 +654,15 @@ static double inline calc_weight_to_transfer(int c_idx) {
   switch (available_weight_opt) {
     case RAW:
       if (w <= init_clause_weight) {
-        return mult_A * w + add_C;
+        return w - (mult_A * w + add_C);
       } else {
-        return mult_a * w + add_c;
+        return w - (mult_a * w + add_c);
       }
     case MINUS_INIT:
       if (w <= init_clause_weight) {
-        return mult_A * w + add_C - init_clause_weight;
+        return (w - (mult_A * w + add_C)) - init_clause_weight;
       } else {
-        return mult_A * w + add_c - init_clause_weight;
+        return (w - (mult_A * w + add_c)) - init_clause_weight;
       }
     default:
       fprintf(stderr, "Unrecognized option\n"); exit(-1);
@@ -689,6 +689,7 @@ static void transfer_weight(int from_idx, int to_idx, double w) {
 
   clause_weights[from_idx] -= w;
   clause_weights[to_idx] += w;
+  unsat_clause_weight += w;
 
   // Store diff in the memory, if the rate is positive
   if (weight_statistics_log_rate > 0) {
@@ -773,7 +774,8 @@ static void distribute_singular(const int c_idx) {
         loop_counter < loop_stop);
   }
 
-  transfer_weight(max_neighbor_idx, c_idx, calc_weight_to_transfer(c_idx));
+  transfer_weight(max_neighbor_idx, c_idx, 
+      calc_weight_to_transfer(max_neighbor_idx));
 }
 
 
@@ -977,6 +979,11 @@ void run_ddfw_algorithm() {
   int timeout_loop_counter = LOOPS_PER_TIMEOUT_CHECK;
   struct timeval start_time, stop_time;
   gettimeofday(&start_time, NULL);
+ 
+  // Spit out statistics before any flips, if enabled
+  if (weight_statistics_log_rate > 0) {
+    log_weight_statistics(algorithm_run, weight_transfer_count, 0);
+  }
 
   int var_to_flip;
   while (num_unsat_clauses > 0) {
