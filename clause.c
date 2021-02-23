@@ -14,6 +14,7 @@
 #include "clause.h"
 #include "logger.h"
 #include "xmalloc.h"
+#include "neighborhood.h"
 
 #include <stdio.h>
 
@@ -218,6 +219,9 @@ void initialize_formula(int num_cs, int num_vs) {
   cost_compute_vars = xmalloc(num_vars * sizeof(int));
   cost_compute_idxs = xmalloc((num_vars + 1) * sizeof(int));
   memset(cost_compute_idxs, 0xff, (num_vars + 1) * sizeof(int));
+
+  // Allocate memory for neighborhood structures
+  allocate_neighborhoods();
   
   log_str("c Allocated memory successfully\n");
 }
@@ -239,10 +243,12 @@ void initialize_clause(int clause_idx, int size, int *lit_idxs) {
   memcpy(clause_literals[clause_idx], lit_idxs, size * sizeof(int));
 }
 
+
 /** @brief Processes the clauses read in from the CNF input file and before
  *         the DDFW algorithm is run.
  *
  *  Some post-processing that is done is
+ *    - Calculates neighboring clauses for each clause (used in wght dist)
  *    - TODO fill in
  *
  *  @return void, but calls exit(-1) on memory allocation failure.
@@ -268,7 +274,7 @@ void process_clauses(void) {
       }
 
       literal_clauses[l_idx][clause_counts[l_idx]] = c;
-      clause_counts[l_idx]++;
+      clause_counts[l_idx] = clause_counts[l_idx] + 1;
       lits++;
     }
 
@@ -282,7 +288,11 @@ void process_clauses(void) {
   for (int i = 1; i <= num_vars; i++) {
     add_cost_compute_var(i);
   }
+
+  // After processing everything above, initialize neighborhood structures
+  compute_neighborhoods();
 }
+
 
 /** @brief Resets the various data structures in use by clause.c
  *         so the algorithm can run again on the same CNF file.
@@ -401,6 +411,9 @@ void generate_random_assignment(void) {
 
   lowest_unsat_clauses = num_unsat_clauses;
 
+  // Once all sat/unsat clauses have been computed, update neighborhood structs
+  initialize_neighborhoods();
+
   if (get_verbosity() == VERBOSE) {
     log_assignment();
   }
@@ -459,6 +472,9 @@ void flip_variable(const int var_idx) {
         add_cost_compute_var(cl_var_idx); 
         c_to_lits++;
       }
+
+      // The clause affects the neighborhood on flipping sign
+      update_neighborhood_on_flip(c_idx);
     } else if (true_lits == 1) {
       // If instead the clause has 1 true literal, only the last true
       // literal is critical and can make the clause false if flipped
@@ -494,6 +510,9 @@ void flip_variable(const int var_idx) {
         add_cost_compute_var(cl_var_idx);
         c_to_lits++;
       }
+
+      // The clause affects the neighborhood on flipping sign
+      update_neighborhood_on_flip(c_idx);
     } else if (true_lits == 2) {
       // If instead the literal is made "non-critical," only the other true
       //   literal must be re-computed

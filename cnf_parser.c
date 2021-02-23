@@ -75,8 +75,7 @@ void parse_cnf_file(char *filename) {
         literal_occ[lit_idx]++;
         clause_idx_buf[clause_size++] = lit_idx;
       } else {
-        // Read in a 0, so we are done readig this clause
-        // Initialize a new clause
+        // We have read in a 0, so we are done reading this clause
         initialize_clause(scanned_clauses++, clause_size, clause_idx_buf);
       }
     } while (var != 0);

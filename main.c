@@ -14,6 +14,8 @@
 #include "clause.h"
 #include "ddfw.h"
 #include "logger.h"
+#include "neighborhood.h"
+#include "weight_transfer.h"
 
 /** Calculates the absolute value of the number passed in. */
 #ifndef ABS
