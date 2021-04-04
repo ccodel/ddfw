@@ -101,6 +101,9 @@ static void transfer_weight(int from_idx, int to_idx, double w) {
   if (clause_num_true_lits[from_idx] == 1) {
     const int mask_lit = clause_lit_masks[from_idx];
     add_cost_compute_var(VAR_IDX(mask_lit));
+
+    // Since critical, update the critical weight for the remaining var
+    literal_crit_sat_weights[mask_lit] -= w;
   }
 
   // All literals in the "to" clause can be cost-reducing, add to cost compute
@@ -109,6 +112,10 @@ static void transfer_weight(int from_idx, int to_idx, double w) {
   for (int l = 0; l < to_size; l++) {
     const int l_idx = *to_lits;
     add_cost_compute_var(VAR_IDX(l_idx));
+
+    // Also add weight to the unsat weights since more weight on the clause
+    literal_unsat_weights[l_idx] += w;
+
     to_lits++;
   }
 
@@ -192,7 +199,6 @@ static void distribute_singular(const int c_idx) {
   // Transfer the weight, then update the max if in neighborhood
   max_weight = clause_weights[max_idx];
   double w = calculate_transfer_weight(max_weight);
-  transfer_weight(max_idx, c_idx, w);
 
   if (is_in_neighborhood) {
     if (second_max_idx != -1 && second_max_weight > clause_weights[max_idx]) {
@@ -203,6 +209,8 @@ static void distribute_singular(const int c_idx) {
       neigh_max_idxs[c_idx] = max_idx;
     }
   }
+
+  transfer_weight(max_idx, c_idx, w);
 }
 
 
@@ -216,6 +224,7 @@ static void distribute_above_init(const int c_idx) {
   int *neighborhood = neigh_clauses[c_idx];
 
   if (neigh_size == 0) return; // Strange short-circuit, just in case
+  if (neigh_num_sat[c_idx] == 0) return;
 
   // If the transfer rule is SUM or AVG, then a total sum is needed
   double sum = neigh_weights[c_idx];
@@ -252,6 +261,9 @@ static void distribute_all(const int c_idx) {
   const int neigh_size = neigh_sizes[c_idx];
   int *neighborhood = neigh_clauses[c_idx];
 
+  if (neigh_size == 0) return; // Short-circuit to prevent div by 0
+  if (neigh_num_sat[c_idx] == 0) return;
+
   // If the transfer rule is SUM or AVG, then a total sum is needed
   double sum = neigh_weights[c_idx];
   double avg_weight = sum / ((double) neigh_size);
@@ -268,7 +280,7 @@ static void distribute_all(const int c_idx) {
         case RULE_SUM:
           transfer_weight(cn_idx, c_idx, (w / sum) * avg);              break;
         case RULE_AVG:
-          transfer_weight(cn_idx, c_idx, avg);
+          transfer_weight(cn_idx, c_idx, avg);                          break;
         default:
           fprintf(stderr, "Unrecognized rule group\n"); exit(-1);
       }
@@ -277,6 +289,43 @@ static void distribute_all(const int c_idx) {
     neighborhood++;
   }
 }
+
+
+/** @brief Applies the rule to the sum of satisfied weight.
+ *
+ *  @param c_idx  The index number of the clause to transfer weight to.
+ */
+static void distribute_active(const int c_idx) {
+  const int neigh_size = neigh_sizes[c_idx];
+  int *neighborhood = neigh_clauses[c_idx];
+
+  if (neigh_size == 0) return; // Short-circuit to prevent div by 0
+  if (neigh_num_sat[c_idx] == 0) return;
+
+  // If the transfer rule is SUM or AVG, then a total sum is needed
+  double sum = neigh_weights[c_idx];
+  double weight_diff = calculate_transfer_weight(sum);
+  double avg = weight_diff / ((double) neigh_num_sat[c_idx]);
+
+  // Loop over all neighbors and transfer weight if satisfied
+  for (int c = 0; c < neigh_size; c++) {
+    const int cn_idx = *neighborhood;
+    const double w = clause_weights[cn_idx];
+    if (clause_num_true_lits[cn_idx] > 0) {
+      switch (rule_grp) {
+        case RULE_SUM:
+          transfer_weight(cn_idx, c_idx, (w / sum) * avg);              break;
+        case RULE_AVG:
+          transfer_weight(cn_idx, c_idx, avg);                          break;
+        default:
+          fprintf(stderr, "Unrecognized rule group\n"); exit(-1);
+      }
+    }
+
+    neighborhood++;
+  }
+}
+
 
 
 /** @brief Distribute weights from satisfied to unsatisfied clauses.
@@ -289,6 +338,23 @@ static void distribute_all(const int c_idx) {
 void distribute_weights(void) {
   // Loop over all false clauses
   int *false_clauses = false_clause_members;
+
+  /*
+  int set_temp = 0;
+  double temp_a, temp_A, temp_c, temp_C;
+  if (num_weight_transfers == 0) {
+    set_temp = 1;
+    temp_a = mult_a;
+    temp_A = mult_A;
+    temp_c = add_c;
+    temp_C = add_C;
+    mult_a = 1.0;
+    mult_A = 1.0;
+    add_c = -0.05 * init_clause_weight;
+    add_C = -0.05 * init_clause_weight;
+  }
+  */
+
   for (int c = 0; c < num_unsat_clauses; c++) {
     const int c_idx = *false_clauses;
     switch (transfer_grp) {
@@ -298,12 +364,23 @@ void distribute_weights(void) {
         distribute_above_init(c_idx);    break;
       case ALL:
         distribute_all(c_idx);           break;
+      case ACTIVE:
+        distribute_active(c_idx);        break;
       default:
         fprintf(stderr, "Unrecognized transfer group\n"); exit(-1);
     }
 
     false_clauses++;
   }
+
+  /*
+  if (set_temp) {
+    add_c = temp_c;
+    add_C = temp_C;
+    mult_a = temp_a;
+    mult_A = temp_A;
+  }
+  */
 }
 
 

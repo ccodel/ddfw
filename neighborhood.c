@@ -14,14 +14,16 @@
  *  @bug No known bugs.
  */
 
+#include <stdint.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "verifier.h"
 #include "clause.h"
 #include "xmalloc.h"
+#include "logger.h"
 #include "neighborhood.h"
-
 
 int *neigh_sizes;
 int *neigh_num_sat;
@@ -211,7 +213,8 @@ void update_neighborhood_on_flip(const int c_idx) {
       const int nc_idx = *neighs;
       neigh_num_sat[nc_idx]++;
       neigh_weights[nc_idx] += w;
-      if (neigh_max_weights[nc_idx] < w) {
+      if (neigh_max_weights[nc_idx] < w || 
+          (neigh_max_weights[nc_idx] == w && neigh_max_idxs[nc_idx] == -1)) {
         neigh_max_weights[nc_idx] = w;
         neigh_max_idxs[nc_idx] = c_idx;
       }
@@ -219,6 +222,8 @@ void update_neighborhood_on_flip(const int c_idx) {
       neighs++;
     }
   }
+
+  verify_neighborhoods();
 }
 
 
@@ -243,4 +248,6 @@ void update_neighborhood_on_weight_transfer(const int c_idx, double diff) {
 
     neighs++;
   }
+
+  verify_neighborhoods();
 }

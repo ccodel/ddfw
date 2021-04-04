@@ -188,6 +188,7 @@
 #include <getopt.h>
 #include <time.h>
 #include <float.h>
+#include <signal.h>
 
 #include "ddfw.h"
 #include "clause.h"
@@ -196,6 +197,7 @@
 #include "xmalloc.h"
 #include "neighborhood.h"
 #include "weight_transfer.h"
+#include "verifier.h"
 
 ///////////////////////////////////////////////////////////////////////////////
 // CONFIGURATION MACROS
@@ -216,7 +218,7 @@
 #ifdef DEBUG
 #define LOOPS_PER_TIMEOUT_CHECK     1000
 #else
-#define LOOPS_PER_TIMEOUT_CHECK     1000000
+#define LOOPS_PER_TIMEOUT_CHECK     1000
 #endif
 
 /** @brief Default multiplicative and additive constants.
@@ -339,215 +341,9 @@ transfer_group_t transfer_grp = SINGULAR;
 rule_group_t rule_grp = RULE_SINGULAR;
 available_weight_option_t available_weight_opt = RAW;
 
-#ifdef DEBUG
-/** @brief Membership array data structure used for verifying the calculation
- *         of cost-reducing variables. Not included in normal compilation.
- */
-static int *cost_reducing_idxs_copy = NULL;
-static int *cost_reducing_vars_copy = NULL;
-static double *cost_reducing_weights_copy = NULL;
-#endif
-
 ///////////////////////////////////////////////////////////////////////////////
 // DDFW algorithm implementation
 ///////////////////////////////////////////////////////////////////////////////
-
-#ifdef DEBUG
-/** @brief Verifies the computed cost reducing vars by looping over all
- *         variables, instead of taking "cost_compute_vars" at its word.
- */
-static void verify_cost_reducing_vars() {
-  // First step, copy over the cost reducing indexes array to compare later
-  memcpy(cost_reducing_idxs_copy, cost_reducing_idxs, 
-      (num_vars + 1) * sizeof(int));
-  memset(cost_reducing_idxs, 0xff, (num_vars + 1) * sizeof(int));
-  
-  // Store previous indexes, as they get messed up below
-  memcpy(cost_reducing_vars_copy, cost_reducing_vars,
-      num_cost_reducing_vars * sizeof(int));
-
-  // Next, copy over the weights
-  memcpy(cost_reducing_weights_copy, cost_reducing_weights,
-      num_cost_reducing_vars * sizeof(double));
-  memset(cost_reducing_weights, 0, num_cost_reducing_vars * sizeof(int));
-
-  // Alias arrays
-  double *crw = cost_reducing_weights;
-  double *crwc = cost_reducing_weights_copy;
-
-  // Next, clear number of cost reducing vars and loop through all vars
-  // TODO this is just copied from below, pull out into helper function?
-  const int prev_num_cost_reducing = num_cost_reducing_vars;
-  const double prev_total_cost = total_cost_reducing_weight;
-  num_cost_reducing_vars = 0;
-  total_cost_reducing_weight = 0.0;
-  for (int v_idx = 1; v_idx <= num_vars; v_idx++) {
-    const int l_idx = LIT_IDX(v_idx);
-    const int assigned = ASSIGNMENT(l_idx);
-    double satisfied_weight = 0.0;
-    double unsatisfied_weight = 0.0;
-
-    // Determine the index of the true literal
-    int true_idx, false_idx;
-    if (assigned) {
-      true_idx = l_idx;
-      false_idx = NEGATED_IDX(l_idx);
-    } else {
-      true_idx = NEGATED_IDX(l_idx);
-      false_idx = l_idx;
-    }
-
-    const int true_occ = literal_occ[true_idx];
-    const int false_occ = literal_occ[false_idx];
-
-    // Loop over satisfied clauses containing the true literal
-    int *l_to_clauses = literal_clauses[true_idx];
-    for (int c = 0; c < true_occ; c++) {
-      const int c_idx = *l_to_clauses;
-      if (clause_num_true_lits[c_idx] == 1) {
-        unsatisfied_weight += clause_weights[c_idx];
-      }
-
-      l_to_clauses++;
-    }
-
-    // Loop over unsatisfied clauses containing the false literal
-    l_to_clauses = literal_clauses[false_idx];
-    for (int c = 0; c < false_occ; c++) {
-      const int c_idx = *l_to_clauses;
-      if (clause_num_true_lits[c_idx] == 0) {
-        satisfied_weight += clause_weights[c_idx];
-      }
-
-      l_to_clauses++;
-    }
-
-    // Determine if flipping the truth value of the true literal
-    //   would result in more satisfied weight than unsatisfied weight
-    const double diff = satisfied_weight - unsatisfied_weight;
-    if (diff > 0.0) {
-      add_cost_reducing_var(v_idx, diff);
-    } else if (diff <= 0.0) {
-      remove_cost_reducing_var(v_idx);
-    }
-  }
-
-  // Now compare the number of cost reducing variables found
-  if (prev_num_cost_reducing != num_cost_reducing_vars) {
-    printf("Number of cost reducing variables not the same, prev %d, now %d\n",
-        prev_num_cost_reducing, num_cost_reducing_vars);
-    exit(-1);
-  }
-
-  // Compare the total cost of reducing variables
-  if (ABS(total_cost_reducing_weight - prev_total_cost) > 0.01) {
-    printf("Total cost differed, prev %lf, now %lf\n",
-        prev_total_cost, total_cost_reducing_weight);
-    exit(-1);
-  }
-
-  // For each variable, check the internal consistency of both arrays
-  // Then cross-check arrays for membership and stored weight
-  for (int i = 1; i <= num_vars; i++) {
-    const int crix = cost_reducing_idxs[i];
-    const int cricx = cost_reducing_idxs_copy[i];
-
-    // First, check that they share cost-reducing status
-    if ((crix == -1 && cricx != -1) || (crix != -1 && cricx == -1)) {
-      printf("Arrays differed in index at var %d\n", i);
-      exit(-1);
-    }
-
-    // If both are present, check that their arrays are interally consistent
-    if (crix != -1) {
-      if (crix >= num_cost_reducing_vars || cricx >= num_cost_reducing_vars) {
-        printf("Indexes out of bounds for %d\n", i);
-        exit(-1);
-      }
-
-      if (cost_reducing_vars_copy[cricx] != i) {
-        printf("Cost reducing vars original not consistent for %d\n", i);
-        exit(-1);
-      }
-
-      if (cost_reducing_vars[crix] != i) {
-        printf("Cost reducing vars new copy not consistent for %d\n", i);
-        exit(-1);
-      }
-
-      // Now check that weights align
-      if (ABS(crw[crix] - crwc[cricx]) > 0.001) {
-        printf("Weights differed for variable %d: orig %lf, new %lf\n", 
-            i, crwc[cricx], crw[crix]);
-        exit(-1);
-      }
-    }
-  }
-
-  // Copy the copies back
-  memcpy(cost_reducing_idxs, cost_reducing_idxs_copy, 
-      (num_vars + 1) * sizeof(int));
-  memcpy(cost_reducing_weights, cost_reducing_weights_copy,
-      num_cost_reducing_vars * sizeof(double));
-  memcpy(cost_reducing_vars, cost_reducing_vars_copy,
-      num_cost_reducing_vars * sizeof(int));
-  total_cost_reducing_weight = prev_total_cost;
-}
-
-
-/** @brief Verifies counts of satisfying literals and clauses.
- *
- *  Loops through all the clauses to check that the number of satisfying
- *  literals for that clause is correct. Also keeps track of the number
- *  of unsatisfied clauses in the entire formula and compares against
- *  the amortized variable "num_unsat_clauses."
- */
-static void verify_clauses_and_assignment() {
-  // Alias pointers used for iteration
-  int *num_true_lits = clause_num_true_lits;
-  int *sizes = clause_sizes;
-  int **cl_to_lits = clause_literals;
-  int unsat_clause_counter = 0;
-
-  for (int i = 0; i < num_clauses; i++) {
-    const int size = *sizes;
-    const int true_lits = *num_true_lits;
-    int *lits = *cl_to_lits;
-
-    // Loop through the literals and check against assignment
-    int true_lit_counter = 0;
-    for (int j = 0; j < size; j++) {
-      char a = ASSIGNMENT(*lits);
-      int n = IS_NEGATED(*lits);
-      if ((a && !n) || (!a && n)) {
-        true_lit_counter++;
-      }
-      
-      lits++;
-    }
-
-    
-    if (true_lit_counter != true_lits) {
-      printf("Number of true literals differs for clause %d\n", i);
-      exit(-1);
-    }
-
-    if (true_lit_counter == 0) {
-      unsat_clause_counter++;
-    }
-
-    // Increment pointers into clause data
-    num_true_lits++;
-    sizes++;
-    cl_to_lits++;
-  }
-
-  if (unsat_clause_counter != num_unsat_clauses) {
-    printf("Number of unsat clauses differs\n");
-    exit(-1);
-  }
-}
-#endif /* DEBUG */
 
 /** @brief Finds the literals that cause a decrease in the total amount of
  *         weight held by unsatisfied clauses if flipped and stores their
@@ -588,30 +384,11 @@ static void find_cost_reducing_literals() {
       false_idx = l_idx;
     }
 
-    const int true_occ = literal_occ[true_idx];
-    const int false_occ = literal_occ[false_idx];
-
     // Check clauses containing the true literal for ones that can become unsat
-    int *l_to_clauses = literal_clauses[true_idx];
-    for (int c = 0; c < true_occ; c++) {
-      const int c_idx = *l_to_clauses;
-      if (clause_num_true_lits[c_idx] == 1) {
-        unsatisfied_weight += clause_weights[c_idx];
-      }
-
-      l_to_clauses++;
-    }
+    unsatisfied_weight = literal_crit_sat_weights[true_idx];
 
     // Check clauses containing the false literal for those that can become sat
-    l_to_clauses = literal_clauses[false_idx];
-    for (int c = 0; c < false_occ; c++) {
-      const int c_idx = *l_to_clauses;
-      if (clause_num_true_lits[c_idx] == 0) {
-        satisfied_weight += clause_weights[c_idx];
-      }
-
-      l_to_clauses++;
-    }
+    satisfied_weight = literal_unsat_weights[false_idx];
 
     // Determine if flipping the truth value of the true literal
     //   would result in more satisfied weight than unsatisfied weight
@@ -627,9 +404,7 @@ static void find_cost_reducing_literals() {
     cc_vars--;
   }
 
-#ifdef DEBUG
   verify_cost_reducing_vars();
-#endif
 }
 
 
@@ -638,13 +413,6 @@ static void find_cost_reducing_literals() {
  *  Main loop.
  */
 void run_ddfw_algorithm() {
-#ifdef DEBUG
-  if (cost_reducing_idxs_copy == NULL) {
-    cost_reducing_idxs_copy = xmalloc((num_vars + 1) * sizeof(int));
-    cost_reducing_vars_copy = xmalloc(num_vars * sizeof(int));
-    cost_reducing_weights_copy = xmalloc(num_vars * sizeof(double));
-  }
-#endif
 
   generate_random_assignment();
 
@@ -652,7 +420,7 @@ void run_ddfw_algorithm() {
   int timeout_loop_counter = LOOPS_PER_TIMEOUT_CHECK;
   struct timeval start_time, stop_time;
   gettimeofday(&start_time, NULL);
- 
+
   // Spit out statistics before any flips, if enabled
   if (weight_statistics_log_rate > 0) {
     log_weight_statistics(algorithm_run, 0, 0);
@@ -660,6 +428,10 @@ void run_ddfw_algorithm() {
 
   int var_to_flip;
   while (num_unsat_clauses > 0) {
+    // As we loop, verify various components and data structures
+    verify_clauses_and_assignment();
+    verify_crit_sat_unsat_weights();
+
     find_cost_reducing_literals();
     
     // See if any literals will reduce the weight
@@ -735,7 +507,7 @@ check_timeout:
         timeout_loop_counter = LOOPS_PER_TIMEOUT_CHECK;
         gettimeofday(&stop_time, NULL);
 
-        log_str("c %d unsatisfied clauses after %d flips\n", 
+        log_str("c %d unsatisfied clauses after %d flips\n",
             num_unsat_clauses, num_flips);
 
         // Check for timeout
@@ -743,10 +515,6 @@ check_timeout:
           break;
       }
     }
-
-#ifdef DEBUG
-    verify_clauses_and_assignment();
-#endif
   }
 
   gettimeofday(&stop_time, NULL);

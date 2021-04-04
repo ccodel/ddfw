@@ -19,7 +19,7 @@
  *  ALL indicates that weight is transferred from all neighboring clauses.
  */
 typedef enum weight_transfer_group {
-  SINGULAR, ABOVE_INIT, ALL
+  SINGULAR, ABOVE_INIT, ALL, ACTIVE
 } transfer_group_t;
 
 /** @brief Defines how much weight the weight transfer rule is applied to.

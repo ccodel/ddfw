@@ -10,12 +10,15 @@
 #include <stdio.h>
 #include <getopt.h>
 
+#include <time.h>
+
 #include "cnf_parser.h"
 #include "clause.h"
 #include "ddfw.h"
 #include "logger.h"
 #include "neighborhood.h"
 #include "weight_transfer.h"
+#include "verifier.h"
 
 /** Calculates the absolute value of the number passed in. */
 #ifndef ABS
@@ -33,9 +36,11 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
+  // Grab a random seed based on system time
+  int seed = (int) time(NULL);
+
   int ao, Ao, co, Co, d, q, Q, v, w;
   ao = Ao = co = Co = d = q = Q = v = w = 0;
-  int seed = DEFAULT_RAND_SEED;
   char *filename = NULL;
   extern char *optarg;
   char opt;
@@ -64,6 +69,8 @@ int main(int argc, char *argv[]) {
             transfer_grp = ABOVE_INIT;         break;
           case 2:
             transfer_grp = ALL;                break;
+          case 3:
+            transfer_grp = ACTIVE;             break;
           default:
             fprintf(stderr, "Unrecognized transfer group\n");
             return 0;
@@ -183,12 +190,13 @@ int main(int argc, char *argv[]) {
 
   // Check that a weight change will *actually* have an effect, otherwise
   // the weight distribution is an identity, which just won't do
+  /*
   double change_in_weight = (mult_a * init_clause_weight) + add_c;
   if (change_in_weight - init_clause_weight >= -0.001) {
     fprintf(stderr, "Weight transfer must be strictly negaive, not testing\n");
     return 0;
   }
-
+  */
 
   // All command-line arguments have been validated, proceed with setup
   // Print banner
@@ -214,6 +222,8 @@ int main(int argc, char *argv[]) {
       log_str("c  -g ABOVE_INIT\n");           break;
     case ALL:
       log_str("c  -g ALL\n");                  break;
+    case ACTIVE:
+      log_str("c  -g ACTIVE\n");               break;
     default:
       fprintf(stderr, "Unknown transfer group\n");
       return 0;
@@ -293,6 +303,7 @@ int main(int argc, char *argv[]) {
 
   log_str("c All done parsing CLI args, opening file %s\n", filename);
   parse_cnf_file(filename);
+  initialize_verifier();
 
   // Run the algorithm as many times as specified at the command-line
   srand(seed);

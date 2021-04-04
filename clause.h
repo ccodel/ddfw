@@ -123,7 +123,7 @@
  *  @param x A literal index.
  *  @return 1 if the variable is set to true, and 0 otherwise.
  */
-#define ASSIGNMENT(x)      (assignment[(x) / 2])
+#define ASSIGNMENT(x)      (((x) & 0x1) ^ assignment[(x) / 2])
 
 /** Global variables for the single formula DDFW is solving. */
 // TODO does packaging into a struct so there is one extern too slow?
@@ -160,6 +160,10 @@ extern int **clause_literals; // Index by clause num, then by literal num
 // Literal information - use LIT_IDX
 extern int *literal_occ;
 extern int **literal_clauses; // Index by literal num, then by clause num
+
+// Breakdown of literal clause weight info
+extern double *literal_unsat_weights;
+extern double *literal_crit_sat_weights;
 
 // Bookkeeping structures
 // Membership struct for false clauses

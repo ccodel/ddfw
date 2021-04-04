@@ -15,6 +15,7 @@
 #include "logger.h"
 #include "xmalloc.h"
 #include "neighborhood.h"
+#include "verifier.h"
 
 #include <stdio.h>
 
@@ -56,6 +57,10 @@ int **clause_literals = NULL;
 // Literal information - 2-indexed (use LIT_IDX)
 int *literal_occ = NULL;
 int **literal_clauses = NULL;
+
+// Breakdown of literal clause weight info
+double *literal_unsat_weights = NULL;
+double *literal_crit_sat_weights = NULL;
 
 // Bookkeeping structures
 // Membership struct for false clauses
@@ -207,6 +212,9 @@ void initialize_formula(int num_cs, int num_vs) {
   literal_occ = xcalloc(lit_arr, sizeof(int));
   literal_clauses = xcalloc(lit_arr, sizeof(int *));
 
+  literal_unsat_weights = xcalloc(lit_arr, sizeof(double));
+  literal_crit_sat_weights = xcalloc(lit_arr, sizeof(double));
+
   false_clause_members = xmalloc(num_clauses * sizeof(int));
   false_clause_indexes = xmalloc(num_clauses * sizeof(int));
   memset(false_clause_indexes, 0xff, num_clauses * sizeof(int));
@@ -305,11 +313,18 @@ void reset_data_structures(void) {
   num_unsat_clauses = 0;
   memset(false_clause_indexes, 0xff, num_clauses * sizeof(int));
 
+  total_cost_reducing_weight = 0.0;
   num_cost_reducing_vars = 0;
   memset(cost_reducing_idxs, 0xff, (num_vars + 1) * sizeof(int));
+  memset(cost_reducing_weights, 0, num_vars * sizeof(double));
 
   num_cost_compute_vars = 0;
   memset(cost_compute_idxs, 0xff, (num_vars + 1) * sizeof(int));
+
+  // Add all literals to cost compute structure
+  for (int i = 1; i <= num_vars; i++) {
+    add_cost_compute_var(i);
+  }
 
   // Redistribute weights to the clauses
   double *weights = clause_weights;
@@ -317,6 +332,9 @@ void reset_data_structures(void) {
     *weights = init_clause_weight;
     weights++;
   }
+
+  memset(literal_crit_sat_weights, 0, (num_literals + 2) * sizeof(double));
+  memset(literal_unsat_weights, 0, (num_literals + 2) * sizeof(double));
 }
 
 /** @brief Generates a random variable assignment for the global formula.
@@ -381,11 +399,10 @@ void generate_random_assignment(void) {
     // Loop through the literals to see how many are satisfied
     for (int l = 0; l < size; l++) {
       int lit_idx = *ls;
-      int negated = IS_NEGATED(lit_idx);
       int assigned = ASSIGNMENT(lit_idx);
 
       // If the literal evaluates to true, update clause information
-      if ((assigned && !negated) || (!assigned && negated)) {
+      if (assigned) {
         sat_lits++;
         new_mask ^= lit_idx;
       }
@@ -414,9 +431,27 @@ void generate_random_assignment(void) {
   // Once all sat/unsat clauses have been computed, update neighborhood structs
   initialize_neighborhoods();
 
+  // Compute unsat weight and critical sat weight for all literals
+  // TODO alias pointers later
+  for (int c = 0; c < num_clauses; c++) {
+    const int clause_size = clause_sizes[c];
+    int *literals = clause_literals[c];
+    const double w = clause_weights[c];
+    if (clause_num_true_lits[c] == 0) {
+      for (int l = 0; l < clause_size; l++) {
+        literal_unsat_weights[literals[l]] += w;
+      }
+    } else if (clause_num_true_lits[c] == 1) {
+      const int mask_lit = clause_lit_masks[c];
+      literal_crit_sat_weights[mask_lit] += w;
+    }
+  }
+
   if (get_verbosity() == VERBOSE) {
     log_assignment();
   }
+
+  verify_clauses_and_assignment();
 }
 
 /** @brief Takes an index of a literal to flip and flips it in the assignment.
@@ -434,6 +469,8 @@ void flip_variable(const int var_idx) {
   const int not_lit_idx = NEGATED_IDX(pos_lit_idx);
   const int assigned = ASSIGNMENT(pos_lit_idx);
 
+  // Affect assignment bitvector
+  assignment[var_idx] = !assignment[var_idx];
   add_cost_compute_var(var_idx);
 
   // Determine which literal has the truth value, to flip correct clauses
@@ -449,6 +486,9 @@ void flip_variable(const int var_idx) {
   const int l_occ = literal_occ[l_idx];
   const int not_occ = literal_occ[not_l_idx];
 
+  // Since l is being set to false, then by definition, it cannot be a sat lit
+  literal_crit_sat_weights[l_idx] = 0;
+
   // For each clause containing l, set l to false
   int *l_to_clauses = literal_clauses[l_idx];
   for (int c = 0; c < l_occ; c++) {
@@ -457,7 +497,7 @@ void flip_variable(const int var_idx) {
     // Remove literal from sat XOR mask
     clause_num_true_lits[c_idx]--;
     const int true_lits = clause_num_true_lits[c_idx];
-    clause_lit_masks[c_idx] ^= pos_lit_idx;
+    clause_lit_masks[c_idx] ^= l_idx;
 
     // In the case where the clause now has 0 true literals,
     //   all literals become critical, and may be added to cost compute
@@ -465,22 +505,34 @@ void flip_variable(const int var_idx) {
       // Also, the clause is false, and may be added to that list
       add_false_clause(c_idx);
 
+      // TODO document later
       const int size = clause_sizes[c_idx];
       int *c_to_lits = clause_literals[c_idx];
+      const double w = clause_weights[c_idx];
       for (int cl_lit = 0; cl_lit < size; cl_lit++) {
-        const int cl_var_idx = VAR_IDX(*c_to_lits);
+        const int lit = *c_to_lits;
+        const int cl_var_idx = VAR_IDX(lit);
         add_cost_compute_var(cl_var_idx); 
+
+        // Take weight to unsat
+        literal_unsat_weights[lit] += w;
+
         c_to_lits++;
       }
 
       // The clause affects the neighborhood on flipping sign
       update_neighborhood_on_flip(c_idx);
+
     } else if (true_lits == 1) {
       // If instead the clause has 1 true literal, only the last true
       // literal is critical and can make the clause false if flipped
       // Get the last true literal from the literal mask
       const int mask_lit = clause_lit_masks[c_idx];
       add_cost_compute_var(VAR_IDX(mask_lit));
+
+      // Add weight from all literals to crit sat weights
+      const double w = clause_weights[c_idx];
+      literal_crit_sat_weights[mask_lit] += w;
     }
 
     l_to_clauses++;
@@ -505,9 +557,16 @@ void flip_variable(const int var_idx) {
 
       const int size = clause_sizes[c_idx];
       int *c_to_lits = clause_literals[c_idx];
+      const double w = clause_weights[c_idx];
+      literal_crit_sat_weights[not_l_idx] += w;
       for (int cl_lit = 0; cl_lit < size; cl_lit++) {
-        const int cl_var_idx = VAR_IDX(*c_to_lits);
+        const int lit = *c_to_lits;
+        const int cl_var_idx = VAR_IDX(lit);
         add_cost_compute_var(cl_var_idx);
+
+        // Move weight from unsat to crit sat
+        literal_unsat_weights[lit] -= w;
+
         c_to_lits++;
       }
 
@@ -517,14 +576,15 @@ void flip_variable(const int var_idx) {
       // If instead the literal is made "non-critical," only the other true
       //   literal must be re-computed
       add_cost_compute_var(VAR_IDX(mask_before));
+
+      // Now that clause is no longer critical, remove crit sat weight
+      const double w = clause_weights[c_idx];
+      literal_crit_sat_weights[mask_before] -= w;
     }
 
     not_l_to_clauses++;
   }
-
-  // Affect assignment bitvector
-  assignment[var_idx] = !assignment[var_idx];
-
+ 
   if (get_verbosity() == VERBOSE) {
     log_assignment();
   }

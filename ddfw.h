@@ -14,7 +14,7 @@
 #define _DDFW_H_
 
 /** @brief The version number for the current implementation of DDFW. */
-#define VERSION 4
+#define VERSION 5
 
 /** @brief Default randomization seed.
  *
