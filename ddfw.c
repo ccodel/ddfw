@@ -30,15 +30,9 @@
  *
  *  The body of the algorithm is implemented in this file, but helper files
  *  contain important data structures, parsing functions, and logging utilities.
- *  Below is a listing of each helper file and its supporting purpose:
- *
- *    - clause:  Data structures for literals, clauses, assignment, etc.
- *    - cnf_parser: Parses the provided CNF file and pulls out clause info.
- *    - logger:  Logs strings and data structures according to verbosity level.
- *    - xmalloc: Guaranteed memory allocation. Wrappers around exit().
  *  
  *  See below for a high-level description of various implementation features.
- *  See each file listed above for a more in-depth description and for code.
+ *  See each helper file for a more in-depth description and for code.
  *
  *  ///////////////////////////////////////////////////////////////////////////
  *  // IMPLEMENTATION
@@ -83,7 +77,7 @@
  *  fields as individual arrays indexed by literal or clause ID. While doing
  *  so makes the codebase harder to manage, the speedup is necessary to have
  *  a practical SAT solver useful for anything more than trivial formulas.
- *  The breakup of the data structures is handled by clause.h/.c.
+ *  The breakup of the data structures is mainly handled by clause.h/.c.
  *
  *  The main body of DDFW is implemented in run_ddfw_algorithm(). After noting
  *  the system time, the loop will continually flip variables and distribute
@@ -101,7 +95,7 @@
  *
  *  If no cost-reducing variables are present, then for each unsatisfied
  *  clause, weight is distributed from one of its adjacent satisfied clauses
- *  with the hightest weight. Occasionally, a random satisfied clause is
+ *  with the highest weight. Occasionally, a random satisfied clause is
  *  chosen instead. Weight is distributed according to a linear rule:
  *
  *    Let c be the current unsatisfied clause, and let n be its highest weight
@@ -207,7 +201,7 @@
  *  
  *  Can be toggled with the -t <timeout_secs> flag at the command line.
  **/
-#define DEFAULT_TIMEOUT_SECS        100
+#define DEFAULT_TIMEOUT_SECS        60
 
 /** @brief The number of times the main DDFW loop body is run before the number 
  *         of elapsed seconds is checked. Not currently configurable.
@@ -414,6 +408,7 @@ static void find_cost_reducing_literals() {
  */
 void run_ddfw_algorithm() {
 
+  reset_clause_for_alg_run();
   generate_random_assignment();
 
   // Record the time to ensure no timeout
@@ -486,6 +481,14 @@ void run_ddfw_algorithm() {
     }
 
     flip_variable(var_to_flip);
+
+    // Determine if it's been too long since an improvement
+    /*
+    if (num_flips_since_improvement >= MAX(num_flips / 2, num_clauses)) {
+      printf("Restoring to best assignment at %d unsat clauses\n", lowest_unsat_clauses);
+      restore_to_best_assignment();
+    }
+    */
 
     // Log in-run statistics if the rate is reached
     if (weight_statistics_log_rate > 0 && 

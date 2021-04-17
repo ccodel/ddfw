@@ -149,6 +149,8 @@ extern int lowest_unsat_step;
 
 // Formula information - 1-indexed (VAR_IDX indexed)
 extern char *assignment;
+extern char *best_assignment;
+extern long num_flips_since_improvement;
 
 // Clause information - 0 indexed
 extern int *clause_sizes;
@@ -192,9 +194,21 @@ void initialize_formula(int num_cs, int num_vs);
 void initialize_clause(int clause_idx, int size, int *lit_idxs);
 void process_clauses(void);
 
-void reset_data_structures(void);
+void reset_clause_weights(void);
+void reset_cost_reducing_struct(void);
+void reset_cost_compute_struct(void);
+void reset_critical_weights_struct(void);
+void reset_clause_for_alg_run(void);
+
+void restore_to_best_assignment(void);
 
 void generate_random_assignment(void);
 void flip_variable(const int var_idx);
+
+/** Implementation of DDFW+ weight toggle */
+extern long ddfw_plus_counter;
+extern int ddfw_plus_boolean;
+extern int ddfw_reweighting_enabled;
+void reset_to_ddfw_plus_weightings(void);
 
 #endif /* _CLAUSE_H_ */

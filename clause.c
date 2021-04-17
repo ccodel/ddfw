@@ -46,6 +46,8 @@ int lowest_unsat_step = 0;
 
 // Formula information
 char *assignment = NULL;
+char *best_assignment = NULL;
+long num_flips_since_improvement = 0;
 
 // Clause information - 0 indexed
 int *clause_sizes = NULL;
@@ -92,6 +94,11 @@ int num_cost_reducing_vars = 0;
 int *cost_compute_vars = NULL;
 int *cost_compute_idxs = NULL;
 int num_cost_compute_vars = 0;
+
+// TODO experimental
+long ddfw_plus_counter = 0;
+int ddfw_plus_boolean = 0;
+int ddfw_reweighting_enabled = 0;
 
 // TODO make this general / into a macro
 static inline void add_false_clause(int c_idx) {
@@ -201,6 +208,7 @@ void initialize_formula(int num_cs, int num_vs) {
 
   // Allocate all global pointer structures
   assignment = xmalloc((num_vars + 1) * sizeof(char));
+  best_assignment = xmalloc((num_vars + 1) * sizeof(char));
 
   // TODO which need to be calloced?
   clause_sizes = xmalloc(num_clauses * sizeof(int));
@@ -307,6 +315,7 @@ void process_clauses(void) {
  */
 void reset_data_structures(void) {
   num_flips = 0;
+  num_flips_since_improvement = 0;
   lowest_unsat_clauses = num_clauses;
   lowest_unsat_step = 0;
   
@@ -335,6 +344,204 @@ void reset_data_structures(void) {
 
   memset(literal_crit_sat_weights, 0, (num_literals + 2) * sizeof(double));
   memset(literal_unsat_weights, 0, (num_literals + 2) * sizeof(double));
+}
+
+/** @brief Resets the weights held by all clauses. Sets equal to W_init. */
+void reset_clause_weights(void) {
+  double *weights = clause_weights;
+  for (int c = 0; c < num_clauses; c++) {
+    *weights = init_clause_weight;
+    weights++;
+  }
+}
+
+/** @brief Resets the structure that records which variables, when flipped,
+ *         reduce the amount of weight held by unsatisfied clauses.
+ */
+void reset_cost_reducing_struct(void) {
+  num_cost_reducing_vars = 0;
+  total_cost_reducing_weight = 0.0;
+  memset(cost_reducing_idxs, 0xff, (num_vars + 1) * sizeof(int));
+  memset(cost_reducing_weights, 0, num_vars * sizeof(double));
+  // This isn't strictly necessary, hence why it's commented out
+  // memset(cost_reducing_vars, 0, num_vars * sizeof(int));
+}
+
+/** @brief Resets the structure that records which variables need their
+ *         cost reduction values computed.
+ *
+ *  Adds all variables to the structure to be computed.
+ */
+void reset_cost_compute_struct(void) {
+  num_cost_compute_vars = 0;
+  memset(cost_compute_idxs, 0xff, (num_vars + 1) * sizeof(int));
+  // This isn't strictly necessary, hence why it's commented out
+  // memset(cost_compute_vars, 0, num_vars * sizeof(int));
+  for (int i = 1; i <= num_vars; i++) {
+    add_cost_compute_var(i);
+  }
+}
+
+// TODO experimental
+static void compute_critical_weights_struct(void) {
+  // Compute unsat weight and critical sat weight for all literals
+  // TODO alias pointers later
+  for (int c = 0; c < num_clauses; c++) {
+    const int clause_size = clause_sizes[c];
+    int *literals = clause_literals[c];
+    const double w = clause_weights[c];
+    if (clause_num_true_lits[c] == 0) {
+      for (int l = 0; l < clause_size; l++) {
+        literal_unsat_weights[literals[l]] += w;
+      }
+    } else if (clause_num_true_lits[c] == 1) {
+      const int mask_lit = clause_lit_masks[c];
+      literal_crit_sat_weights[mask_lit] += w;
+    }
+  }
+}
+
+/** @brief Resets the structure that keeps track of the unsat and critical
+ *         weights associated with each literal.
+ */
+void reset_critical_weights_struct(void) {
+  memset(literal_crit_sat_weights, 0, (num_literals + 2) * sizeof(double));
+  memset(literal_unsat_weights, 0, (num_literals + 2) * sizeof(double));
+}
+
+/** @brief Resets the structure that keeps track of the false clauses. */
+static void reset_false_clause_struct(void) {
+  num_unsat_clauses = 0;
+  memset(false_clause_indexes, 0xff, num_clauses * sizeof(int));
+  // memset(false_clause_members, 0, num_clauses * sizeof(int));
+}
+
+// TODO experimental
+void reset_to_ddfw_plus_weightings(void) {
+  ddfw_plus_counter++;
+  if (ddfw_plus_counter >= num_clauses) {
+    // printf("Resetting to ddfw plus at %ld flips\n", num_flips);
+    ddfw_plus_counter = 0;
+    if (!ddfw_plus_boolean) {
+      ddfw_plus_boolean = 1;
+      const double w_to_add = init_clause_weight / 2.0;
+      for (int c = 0; c < num_clauses; c++) {
+        clause_weights[c] += w_to_add;
+      }
+    } else {
+      ddfw_plus_boolean = 0;
+      const double sw = init_clause_weight * 1.5;
+      for (int c = 0; c < num_clauses; c++) {
+        if (clause_num_true_lits[c] == 0) {
+          clause_weights[c] = init_clause_weight;
+        } else {
+          clause_weights[c] = sw;
+        }
+      }
+    }
+
+    reset_cost_reducing_struct();
+    reset_cost_compute_struct();
+    reset_critical_weights_struct();
+    compute_critical_weights_struct();
+    initialize_neighborhoods();
+  }
+}
+
+/** @brief Resets all structures that the clause file is in charge of
+ *         to prepare for a new run of the DDFW algorithm.
+ *
+ *  The clause file is in charge of:
+ *    - clause weights
+ *    - cost reducing variables
+ *    - cost compute variables
+ *    - (best) assignment
+ *    - Various run statistics
+ */
+void reset_clause_for_alg_run(void) {
+  reset_clause_weights();
+  reset_cost_reducing_struct();
+  reset_cost_compute_struct();
+  reset_critical_weights_struct();
+  reset_false_clause_struct();
+  
+  // Reset various other statistics
+  unsat_clause_weight = 0.0;
+  num_flips = 0;
+  lowest_unsat_clauses = num_clauses;
+  lowest_unsat_step = 0;
+
+  // TODO experimental
+  ddfw_plus_counter = 0;
+  ddfw_plus_boolean = 0;
+}
+
+/** @brief Resets the structures the clause file is in charge of when the
+ *         assignment changes by more than one flip at a time.
+ *
+ *  Called in generate_new_assignment() and when restoring to best assign.
+ */
+static void reset_clause_structures_for_new_assignment(void) {
+  reset_false_clause_struct();
+
+  // Iterate through the clauses to see which are satisfied
+  const int nc = num_clauses;
+  int *mask = clause_lit_masks;
+  int *sizes = clause_sizes;
+  int *true_lits = clause_num_true_lits;
+  int **literals = clause_literals;
+  int new_mask, sat_lits;
+
+  for (int i = 0; i < nc; i++) {
+    sat_lits = 0;
+    new_mask = 0;
+    int *ls = *literals;
+    const int size = *sizes;
+
+    // Loop through the literals to see how many are satisfied
+    for (int l = 0; l < size; l++) {
+      int lit_idx = *ls;
+      int assigned = ASSIGNMENT(lit_idx);
+      if (assigned) {
+        sat_lits++;
+        new_mask ^= lit_idx;
+      }
+
+      ls++;
+    }
+
+    if (sat_lits == 0) {
+      add_false_clause(i);
+    }
+
+    // Store lit and mask information back to the arrays
+    *true_lits = sat_lits;
+    *mask = new_mask;
+
+    sizes++;
+    mask++;
+    true_lits++;
+    literals++;
+  }
+
+  lowest_unsat_clauses = num_unsat_clauses;
+
+  // Once all sat/unsat clauses have been computed, update neighborhood structs
+  initialize_neighborhoods();
+  compute_critical_weights_struct();
+}
+
+/** @brief Restores the structures that the clause file is in charge of
+ *         back to the best assignment found so far.
+ */
+void restore_to_best_assignment(void) {
+  reset_clause_weights();
+  reset_cost_reducing_struct();
+  reset_cost_compute_struct();
+  memcpy(assignment, best_assignment, (num_vars + 1) * sizeof(char));
+  num_flips_since_improvement = 0;
+  reset_clause_structures_for_new_assignment();
+  verify_clauses_and_assignment();
 }
 
 /** @brief Generates a random variable assignment for the global formula.
@@ -372,95 +579,19 @@ void reset_data_structures(void) {
 void generate_random_assignment(void) {
   log_str("c Randomizing assignment\n");
 
-  unsat_clause_weight = 0.0;
-
   // Give random bits to assignment
-  // TODO cast to int* for BITS_IN_BYTE fewer calls to rand()
-  //const int slots = (num_vars + BITS_IN_BYTE) / BITS_IN_BYTE;
   for (int i = 1; i <= num_vars; i++) {
     assignment[i] = (char) (rand() & 0x1);
   }
 
-  // TODO think about whether clause -> literal is faster than literal -> clause
-  // Iterate through the clauses to see which are satisfied
-  const int nc = num_clauses;
-  int *mask = clause_lit_masks;
-  int *sizes = clause_sizes;
-  int *true_lits = clause_num_true_lits;
-  int **literals = clause_literals;
-  int new_mask, sat_lits;
-
-  for (int i = 0; i < nc; i++) {
-    sat_lits = 0;
-    new_mask = 0;
-    int *ls = *literals;
-    const int size = *sizes;
-
-    // Loop through the literals to see how many are satisfied
-    for (int l = 0; l < size; l++) {
-      int lit_idx = *ls;
-      int assigned = ASSIGNMENT(lit_idx);
-
-      // If the literal evaluates to true, update clause information
-      if (assigned) {
-        sat_lits++;
-        new_mask ^= lit_idx;
-      }
-
-      ls++;
-    }
-
-    // If not satisfied, update membership in false clauses
-    if (sat_lits == 0) {
-      add_false_clause(i);
-    }
-
-    // Store lit and mask information back to the arrays
-    *true_lits = sat_lits;
-    *mask = new_mask;
-
-    // Move pointers to next clause
-    sizes++;
-    mask++;
-    true_lits++;
-    literals++;
-  }
-
-  lowest_unsat_clauses = num_unsat_clauses;
-
-  // Once all sat/unsat clauses have been computed, update neighborhood structs
-  initialize_neighborhoods();
-
-  // Compute unsat weight and critical sat weight for all literals
-  // TODO alias pointers later
-  for (int c = 0; c < num_clauses; c++) {
-    const int clause_size = clause_sizes[c];
-    int *literals = clause_literals[c];
-    const double w = clause_weights[c];
-    if (clause_num_true_lits[c] == 0) {
-      for (int l = 0; l < clause_size; l++) {
-        literal_unsat_weights[literals[l]] += w;
-      }
-    } else if (clause_num_true_lits[c] == 1) {
-      const int mask_lit = clause_lit_masks[c];
-      literal_crit_sat_weights[mask_lit] += w;
-    }
-  }
-
-  if (get_verbosity() == VERBOSE) {
-    log_assignment();
-  }
-
+  reset_clause_structures_for_new_assignment(); 
   verify_clauses_and_assignment();
 }
 
-/** @brief Takes an index of a literal to flip and flips it in the assignment.
+/** @brief Takes an index of a variable to flip and flips it in the assignment.
  *
- *  The function will change the truth value of the variable corresponding to
- *  the provided lit_idx.
- *
- *  Any internal changes as a result of flipping the variable (weights, marking
- *  literals, etc.) also occur here.
+ *  The function will change the truth value of the variable and update the
+ *  appropriate structures.
  *
  *  @param lit_idx The index into the literals array of the literal to flip.
  */
@@ -474,14 +605,8 @@ void flip_variable(const int var_idx) {
   add_cost_compute_var(var_idx);
 
   // Determine which literal has the truth value, to flip correct clauses
-  int l_idx, not_l_idx;
-  if (assigned) {
-    l_idx = pos_lit_idx;
-    not_l_idx = not_lit_idx;
-  } else {
-    l_idx = not_lit_idx;
-    not_l_idx = pos_lit_idx;
-  }
+  int l_idx = (assigned) ? pos_lit_idx : not_lit_idx;
+  int not_l_idx = (assigned) ? not_lit_idx : pos_lit_idx;
 
   const int l_occ = literal_occ[l_idx];
   const int not_occ = literal_occ[not_l_idx];
@@ -590,10 +715,16 @@ void flip_variable(const int var_idx) {
   }
 
   if (num_unsat_clauses < lowest_unsat_clauses) {
-    log_str("c Record %d after %d flips\n", 
-        num_unsat_clauses, num_flips);
     lowest_unsat_clauses = num_unsat_clauses;
     lowest_unsat_step = num_flips;
+    memcpy(best_assignment, assignment, (num_vars + 1) * sizeof(char));
+    num_flips_since_improvement = 0;
+  } else {
+    ddfw_plus_counter++;
+    num_flips_since_improvement++;
+    if (ddfw_reweighting_enabled) {
+      reset_to_ddfw_plus_weightings();
+    }
   }
 
   num_flips++;

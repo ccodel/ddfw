@@ -45,7 +45,7 @@ int main(int argc, char *argv[]) {
   extern char *optarg;
   char opt;
   while ((opt = getopt(argc, argv, 
-          "dhvqQa:A:c:C:f:g:G:l:m:o:r:s:t:T:w:")) != -1) {
+          "dhvqQza:A:c:C:f:g:G:l:m:o:r:s:t:T:w:")) != -1) {
     switch (opt) {
       case 'a': ao = 1; mult_a = atof(optarg); break;
       case 'A': Ao = 1; mult_A = atof(optarg); break;
@@ -158,6 +158,9 @@ int main(int argc, char *argv[]) {
           fprintf(stderr, "Initial weight must be a positive number\n");
           return 0;
         }
+        break;
+      case 'z':
+        ddfw_reweighting_enabled = 1;
         break;
       default: print_usage(argv[0]); return 0;
     }
@@ -309,7 +312,6 @@ int main(int argc, char *argv[]) {
   srand(seed);
   for (algorithm_run = 1; algorithm_run <= num_restarts; algorithm_run++) {
     run_ddfw_algorithm();
-    reset_data_structures();
   }
 
   return 0;

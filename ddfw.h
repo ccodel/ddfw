@@ -57,6 +57,8 @@ extern double add_C;
 extern int suppress_solution;
 extern int weight_statistics_log_rate;
 
+extern int reset_weights_after_flips;
+
 void run_ddfw_algorithm();
 
 #endif /* _DDFW_H_ */

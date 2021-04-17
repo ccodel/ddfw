@@ -39,6 +39,22 @@ int num_weight_transfers = 0;
 static double recent_transfer_weights[WEIGHT_TRANSFER_MEMORY];
 static int recent_transfer_idx = 0;
 
+/** @brief Returns the index of a random satisfied clause.
+ *  
+ *  The satisfied clause has at least the initial weight.
+ */
+static int get_random_satisfied_clause() {
+  int loop_counter = 0;
+  int loop_stop = 100 * num_clauses;
+  int idx;
+  do {
+    idx = ((unsigned int) rand()) % num_clauses;
+    loop_counter++;
+  } while ((clause_num_true_lits[idx] == 0 ||
+        clause_weights[idx] < init_clause_weight) && loop_counter < loop_stop);
+
+  return idx;
+}
 
 /** @brief Applies the linear rule for weight transferral. Returns the amount
  *         of weight to be transfered.
@@ -181,19 +197,8 @@ static void distribute_singular(const int c_idx) {
     }
   }
 
-  /* If we don't yet have a max-weight neighbor, select a random satisfied
-   * clause with at least initial weight. A counter is used to prevent
-   * infinite loops.
-   */
-  int loop_counter = 0;
-  int loop_stop = 100 * num_clauses;
   if (max_idx == -1) {
-    do {
-      max_idx = ((unsigned int) rand()) % num_clauses;
-      loop_counter++;
-    } while ((clause_num_true_lits[max_idx] == 0 ||
-          clause_weights[max_idx] < init_clause_weight) &&
-        loop_counter < loop_stop);
+    max_idx = get_random_satisfied_clause();
   }
 
   // Transfer the weight, then update the max if in neighborhood
@@ -220,6 +225,15 @@ static void distribute_singular(const int c_idx) {
  *  @param c_idx  The index number of the clause to transfer weight to.
  */
 static void distribute_above_init(const int c_idx) {
+  // If the randomness says so, take weight from random neighbor instead
+  if (((unsigned int) rand()) % RAND_NEIGH_DENOMINATOR < RAND_NEIGH_NUMERATOR) {
+    int idx = get_random_satisfied_clause();
+    double cw = clause_weights[idx];
+    double w = calculate_transfer_weight(cw);
+    transfer_weight(idx, c_idx, w);
+    return;
+  }
+
   const int neigh_size = neigh_sizes[c_idx];
   int *neighborhood = neigh_clauses[c_idx];
 
@@ -258,6 +272,7 @@ static void distribute_above_init(const int c_idx) {
  *  @param c_idx  The index number of the clause to transfer weight to.
  */
 static void distribute_all(const int c_idx) {
+  
   const int neigh_size = neigh_sizes[c_idx];
   int *neighborhood = neigh_clauses[c_idx];
 
@@ -274,6 +289,15 @@ static void distribute_all(const int c_idx) {
     const int cn_idx = *neighborhood;
     const double w = clause_weights[cn_idx];
     if (clause_num_true_lits[cn_idx] > 0) {
+      // If the randomness says so, take weight from random neighbor instead
+      if (((unsigned int) rand()) % RAND_NEIGH_DENOMINATOR < RAND_NEIGH_NUMERATOR) {
+        int idx = get_random_satisfied_clause();
+        double cw = clause_weights[idx];
+        double w = calculate_transfer_weight(cw);
+        transfer_weight(idx, c_idx, w);
+        continue;
+      }
+
       switch (rule_grp) {
         case RULE_SINGULAR:
           transfer_weight(cn_idx, c_idx, calculate_transfer_weight(w)); break;
@@ -338,23 +362,6 @@ static void distribute_active(const int c_idx) {
 void distribute_weights(void) {
   // Loop over all false clauses
   int *false_clauses = false_clause_members;
-
-  /*
-  int set_temp = 0;
-  double temp_a, temp_A, temp_c, temp_C;
-  if (num_weight_transfers == 0) {
-    set_temp = 1;
-    temp_a = mult_a;
-    temp_A = mult_A;
-    temp_c = add_c;
-    temp_C = add_C;
-    mult_a = 1.0;
-    mult_A = 1.0;
-    add_c = -0.05 * init_clause_weight;
-    add_C = -0.05 * init_clause_weight;
-  }
-  */
-
   for (int c = 0; c < num_unsat_clauses; c++) {
     const int c_idx = *false_clauses;
     switch (transfer_grp) {
@@ -372,15 +379,6 @@ void distribute_weights(void) {
 
     false_clauses++;
   }
-
-  /*
-  if (set_temp) {
-    add_c = temp_c;
-    add_C = temp_C;
-    mult_a = temp_a;
-    mult_A = temp_A;
-  }
-  */
 }
 
 
