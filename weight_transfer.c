@@ -11,8 +11,9 @@
 #include <stdio.h>
 
 #include "weight_transfer.h"
+#include "weight_reducer.h"
 #include "neighborhood.h"
-#include "clause.h"
+#include "assignment.h"
 #include "ddfw.h"
 
 /** @brief The probability that the maximum weight neighboring clause is
@@ -103,7 +104,7 @@ static void transfer_weight(int from_idx, int to_idx, double w) {
 
   clause_weights[from_idx] -= w;
   clause_weights[to_idx] += w;
-  unsat_clause_weight += w;
+  total_unsat_clause_weight += w;
 
   // Store the change in weight in the transfer memory
   num_weight_transfers++;
@@ -116,10 +117,10 @@ static void transfer_weight(int from_idx, int to_idx, double w) {
   // update its cost-reducing status
   if (clause_num_true_lits[from_idx] == 1) {
     const int mask_lit = clause_lit_masks[from_idx];
-    add_cost_compute_var(VAR_IDX(mask_lit));
+    add_weight_compute_var(VAR_IDX(mask_lit));
 
     // Since critical, update the critical weight for the remaining var
-    literal_crit_sat_weights[mask_lit] -= w;
+    literal_critical_sat_weights[mask_lit] -= w;
   }
 
   // All literals in the "to" clause can be cost-reducing, add to cost compute
@@ -127,7 +128,7 @@ static void transfer_weight(int from_idx, int to_idx, double w) {
   int *to_lits = clause_literals[to_idx];
   for (int l = 0; l < to_size; l++) {
     const int l_idx = *to_lits;
-    add_cost_compute_var(VAR_IDX(l_idx));
+    add_weight_compute_var(VAR_IDX(l_idx));
 
     // Also add weight to the unsat weights since more weight on the clause
     literal_unsat_weights[l_idx] += w;
@@ -136,7 +137,7 @@ static void transfer_weight(int from_idx, int to_idx, double w) {
   }
 
   // Since weight has been taken from a sat clause, update its neighborhood
-  update_neighborhood_on_weight_transfer(from_idx, w);
+  update_neighborhoods_on_weight_transfer(from_idx, w);
 }
 
 
@@ -360,10 +361,8 @@ static void distribute_active(const int c_idx) {
  *  at the command line.
  */
 void distribute_weights(void) {
-  // Loop over all false clauses
-  int *false_clauses = false_clause_members;
   for (int c = 0; c < num_unsat_clauses; c++) {
-    const int c_idx = *false_clauses;
+    const int c_idx = unsat_clauses[c];
     switch (transfer_grp) {
       case SINGULAR:
         distribute_singular(c_idx);      break;
@@ -376,8 +375,6 @@ void distribute_weights(void) {
       default:
         fprintf(stderr, "Unrecognized transfer group\n"); exit(-1);
     }
-
-    false_clauses++;
   }
 }
 

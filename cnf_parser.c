@@ -5,8 +5,7 @@
  *  parse the literals and clauses in the file and pass them off to
  *  clause.c for allocation and initialization.
  *
- *  No file format beyond DIMACS CNF is currently supported by this
- *  implementation of DDFW.
+ *  No other CNF file format is currently supported by this implementation.
  *
  *  @author Cayden Codel (ccodel@andrew.cmu.edu)
  *
@@ -15,15 +14,25 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
+#include "global_data.h"
+#include "assignment.h"
+#include "neighborhood.h"
+#include "weight_reducer.h"
+#include "initializer.h"
+#include "xmalloc.h"
 #include "cnf_parser.h"
 #include "logger.h"
-#include "clause.h"
 
-/** A buffer for literal indices. Used to store the literals for each
- *  clause when parsing the CNF file.
- *
- *  TODO consider hijacking the reducing_cost_lits extern variable
+/** DIMACS character that starts a comment line. */
+#define DIMACS_COMMENT_LINE ('c')
+
+/** DIMACS character that starts a problem line. */
+#define DIMACS_PROBLEM_LINE ('p')
+
+/** @brief A buffer for literal IDs. Used to store the literals for each
+ *         clause when parsing the CNF file.
  */
 static int clause_idx_buf[MAX_CLAUSE_LENGTH];
 
@@ -51,19 +60,22 @@ void parse_cnf_file(char *filename) {
         fscanf(f, "%*[^\n]");
         continue;
       case DIMACS_PROBLEM_LINE:
-        log_str("c Found problem line, ");
-        int num_clauses, num_vars;
         fscanf(f, "%*s %d %d\n", &num_vars, &num_clauses);
-        log_str("file claims to have %d variables and %d clauses\n",
+        num_literals = num_vars * 2;
+        log_str("c File claims to have %d variables and %d clauses\n",
             num_vars, num_clauses);
-        initialize_formula(num_clauses, num_vars);
         problem_found = 1;
         break;
     }
   }
 
+  // Allocate memory after parsing header
+  allocate_global_memory();
+  allocate_assignment_memory();
+  allocate_neighborhood_memory();
+  allocate_weight_reducer_memory();
+
   // Now scan in all the clauses
-  log_str("c Scanning clauses\n");
   int scanned_clauses = 0;
   while (scanned_clauses < num_clauses) {
     int var = 0, clause_size = 0;
@@ -76,13 +88,20 @@ void parse_cnf_file(char *filename) {
         clause_idx_buf[clause_size++] = lit_idx;
       } else {
         // We have read in a 0, so we are done reading this clause
-        initialize_clause(scanned_clauses++, clause_size, clause_idx_buf);
+        // Set its information (size, literals, etc.)
+        clause_sizes[scanned_clauses] = clause_size;
+        int *lits = xmalloc(clause_size * sizeof(int));
+        memcpy(lits, clause_idx_buf, clause_size * sizeof(int));
+        clause_literals[scanned_clauses] = lits;
+        scanned_clauses++;
       }
     } while (var != 0);
   }
 
-  log_str("c Done with I/O, post-processing CNF file\n");
-  process_clauses();
-  log_str("c Done post-processing, onto the algorithm!\n");
   fclose(f);
+  log_str("c Done parsing, now post-processing CNF file\n");
+
+  initialize_structures_after_parsing_CNF();
+
+  log_str("c Done post-processing, onto the algorithm!\n");
 }

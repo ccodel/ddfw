@@ -25,7 +25,8 @@
 #include <limits.h>
 
 #include "logger.h"
-#include "clause.h"
+#include "global_data.h"
+#include "assignment.h"
 
 #ifndef ABS
 #define ABS(x)   (((x) < 0) ? -(x) : (x))
@@ -310,8 +311,6 @@ void log_reducing_cost_lits(void) {
  *
  */
 void log_weight_statistics(int run, int transfers, double weight_transfer_avg) {
-  // run | flips | transfers | curr_unsat_count | 
-  // best_unsat_count | unsat_weight | avg | min_unsat | max_unsat | min_sat | max_sat
   double min_unsat, min_sat, max_unsat, max_sat;
   min_unsat = min_sat = INT_MAX;
   max_unsat = max_sat = INT_MIN;
@@ -338,8 +337,8 @@ void log_weight_statistics(int run, int transfers, double weight_transfer_avg) {
   }
 
   printf("c In-stats: %d | %ld | %d | %d | %d | %.3f | %.3f | %.3f | %.3f | %.3f | %.3f\n",
-      run, num_flips, transfers, num_unsat_clauses, lowest_unsat_clauses, 
-      unsat_clause_weight, weight_transfer_avg,
+      run, num_flips, transfers, num_unsat_clauses, best_num_unsat_clauses, 
+      total_unsat_clause_weight, weight_transfer_avg,
       min_unsat, max_unsat, min_sat, max_sat);
 }
 
@@ -351,9 +350,9 @@ void log_weight_statistics(int run, int transfers, double weight_transfer_avg) {
  */
 void log_statistics(int run, struct timeval *start, struct timeval *stop) {
   // run | Solved? | flips | best | best_step | time
-  printf("c Stats: %d | %d | %ld | %d | %d | %.3f\n",
-      run, (num_unsat_clauses == 0), num_flips, lowest_unsat_clauses,
-      lowest_unsat_step,
+  printf("c Stats: %d | %d | %ld | %d | %ld | %.3f\n",
+      run, (num_unsat_clauses == 0), num_flips, best_num_unsat_clauses,
+      best_flip_num,
       ((double) (stop->tv_usec - start->tv_usec) / 1000000) + 
       ((double) (stop->tv_sec - start->tv_sec)));
 }

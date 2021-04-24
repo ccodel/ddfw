@@ -19,54 +19,78 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "neighborhood.h"
+#include "global_data.h"
 #include "verifier.h"
-#include "clause.h"
 #include "xmalloc.h"
 #include "logger.h"
-#include "neighborhood.h"
 
-int *neigh_sizes;
-int *neigh_num_sat;
-int **neigh_clauses;
-double *neigh_weights;
-double *neigh_max_weights;
-int *neigh_max_idxs;
+/** @brief The size of each neighborhood.
+ *
+ *  The array is 0-indexed by clause ID. The values are the number of clauses
+ *  other than the considered clause that contain same-sign literals that are
+ *  also present in the considered clause.
+ */
+int *neigh_sizes = NULL;
 
+/** @brief The number of neighbors that are satisfied.
+ *  
+ *  The array is 0-indexed by clause ID.
+ */
+int *neigh_num_sat = NULL;
+
+/** @brief The clause IDs that are neighbors.
+ *
+ *  The array is 0-indexed by clause ID.
+ */
+int **neigh_clauses = NULL;
+
+/** @brief The sum total weight held by the neighborhood.
+ *
+ *  The array is 0-indexed by clause ID.
+ */
+weight *neigh_weights = NULL;
+
+/** @brief The maximum weight held by any single clause in the neighborhood.
+ *  
+ *  The array is 0-indexed by clause ID.
+ */
+weight *neigh_max_weights = NULL;
+
+/** @brief @brief The clause ID of the neighbor with maximum weight.
+ *
+ *  The array is 0-indexed by clause ID.
+ */
+int *neigh_max_idxs = NULL;
 
 /** @brief Allocates the memory needed for neighborhood tracking structures.
  *
- *  Should be called after the CNF file has been parsed for the number of
- *  clauses and variables.
+ *  Should be called after the CNF file has been parsed.
  */
-void allocate_neighborhoods(void) {
+void allocate_neighborhood_memory(void) {
   neigh_sizes = xmalloc(num_clauses * sizeof(int));
   neigh_num_sat = xmalloc(num_clauses * sizeof(int));
   neigh_clauses = xmalloc(num_clauses * sizeof(int *));
-  neigh_weights = xmalloc(num_clauses * sizeof(double));
-  neigh_max_weights = xmalloc(num_clauses * sizeof(double));
+  neigh_weights = xmalloc(num_clauses * sizeof(weight));
+  neigh_max_weights = xmalloc(num_clauses * sizeof(weight));
   neigh_max_idxs = xmalloc(num_clauses * sizeof(int));
 }
 
-
-/** @brief Computes the neighborhood structure between clauses.
+/** @brief Initializes the neighborhood structures.
  *
- *  Should be called after the entirety of the CNF file has been parsed, and
- *  the clause and literal information has been initialized by other modules.
+ *  Should be called after the entirety of the CNF file has been parsed.
  *
- *  TODO Currently, to compute the neighborhoods, an outer loop examines each
- *  clause, then an inner loop goes through each literal and then those clauses
- *  associated with each literal. If two literals are neighbors of the same
- *  clause, then it is not added twice.
- *
- *  TODO because the operation is O(n^2) (or abouts). However, since this is
- *  called once each run, it's excusable.
+ *  To compute the neighborhoods, an outer loop examines each clause, then an 
+ *  inner loop goes through each literal and then those clauses associated 
+ *  with each literal. If two literals are neighbors of the same clause, 
+ *  then it is not added twice.
  */
-void compute_neighborhoods(void) {
+void initialize_neighborhoods(void) {
   // Helper buffer for clause indices for neighbors
   int *neigh_buf = xmalloc(num_clauses * sizeof(int));
   int buf_idx = 0;
 
-  // Alias some pointers for speeup in the loops
+  // Alias some pointers
   int **literals = clause_literals;
   int *sizes = clause_sizes;
 
@@ -119,81 +143,66 @@ void compute_neighborhoods(void) {
     sizes++;
   }
 
-  free(neigh_buf);
+  xfree(neigh_buf);
 }
 
-
-/** @brief Initializes the neighborhood statistics, given an initial assignment.
- *  
- *  Assumes that generate_initial_assignment(), or something similar, has been
- *  called, and the numbers of unsatisfied literals and such have been placed
- *  into their appropriate global variables.
- *
- *  TODO another expensive O(n^2) computation, see above
- */
-void initialize_neighborhoods(void) {
-  // Zero out some fields before computation
-  memset(neigh_num_sat, 0, num_clauses * sizeof(int));
-  memset(neigh_weights, 0, num_clauses * sizeof(double));
-  memset(neigh_max_weights, 0, num_clauses * sizeof(double));
-  memset(neigh_max_idxs, UINT8_MAX, num_clauses * sizeof(int));
-
-  // Alias pointers to be incremented in the loop for speedup
-  int **ncs = neigh_clauses;
-  int *ns = neigh_sizes;
-  int *nns = neigh_num_sat;
-  double *nw = neigh_weights;
-  double *nmw = neigh_max_weights;
-  int *nmi = neigh_max_idxs;
-
-  // Loop through each clause and raw compute
+void initialize_neighborhoods_after_assignment(void) {
+  // Recompute which clauses in the neighborhoods are satisfied
   for (int c = 0; c < num_clauses; c++) {
-    int *clauses = *ncs;
-    int neigh_size = *ns;
-    if (neigh_size == 0) goto next_clause; // Skip stats if no neighborhood
-
-    // Computed stats are: num sat, sum of weights, max weight
     int num_sat_neigh = 0;
-    double sum_neigh_weights = 0.0;
-    double max_neigh_weight = 0.0;
-    int idx_max_weight = -1;
-
-    for (int nc = 0; nc < neigh_size; nc++) {
-      const int nc_idx = *clauses;
-      if (clause_num_true_lits[nc_idx] > 0) {
+    int *nc = neigh_clauses[c];
+    const int neigh_size = neigh_sizes[c];
+    for (int n = 0; n < neigh_size; n++) {
+      const int n_idx = nc[n];
+      if (clause_num_true_lits[n_idx] > 0) {
         num_sat_neigh++;
-        const double w = clause_weights[nc_idx];
-        sum_neigh_weights += w;
-        if (w > max_neigh_weight) {
-          max_neigh_weight = w;
-          idx_max_weight = nc_idx;
-        }
       }
-
-      clauses++;
     }
 
-    // Take the information learned from the neighboring clauses and update
-    *nns = num_sat_neigh;
-    *nw = sum_neigh_weights;
-    *nmw = max_neigh_weight;
-    *nmi = idx_max_weight;
-
-next_clause: // Increment all the pointers to move onto the next clause
-    ncs++; ns++; nns++; nw++; nmw++; nmi++;
+    neigh_num_sat[c] = num_sat_neigh;
   }
+
+  // Now compute all other information
+  initialize_neighborhoods_after_reweighting();
 }
 
+void initialize_neighborhoods_after_reweighting(void) {
+  // Recompute the weights and max weights of the neighborhoods
+  for (int c = 0; c < num_clauses; c++) {
+    int *nc = neigh_clauses[c];
+    const int neigh_size = neigh_sizes[c];
+    weight sum_neigh_weights = 0;
+    weight max_neigh_weight = 0;
+    int idx_max_weight = -1;
+
+    for (int n = 0; n < neigh_size; n++) {
+      const int n_idx = nc[n];
+      if (clause_num_true_lits[n_idx] > 0) {
+        const weight w = clause_weights[n_idx];
+        sum_neigh_weights += w;
+
+        if (w > max_neigh_weight) {
+          max_neigh_weight = w;
+          idx_max_weight = n_idx;
+        }
+      }
+    }
+
+    neigh_weights[c] = sum_neigh_weights;
+    neigh_max_weights[c] = max_neigh_weight;
+    neigh_max_idxs[c] = idx_max_weight;
+  }
+}
 
 /** @brief Updates the neighborhood structures when a clause has a variable
  *         that's flipped.
  *
  *  Should only be called if the clause flips between 0 and 1 satisfied lits.
  */
-void update_neighborhood_on_flip(const int c_idx) {
+void update_neighborhoods_on_flip(const int c_idx) {
   int *neighs = neigh_clauses[c_idx];
   const int neigh_size = neigh_sizes[c_idx];
-  const double w = clause_weights[c_idx];
+  const weight w = clause_weights[c_idx];
 
   if (clause_num_true_lits[c_idx] == 0) {
     // Assume that the clause flipped from sat to unsat - remove weight, etc.
@@ -234,9 +243,9 @@ void update_neighborhood_on_flip(const int c_idx) {
  *  Should only be called after the weight has been transferred.
  *
  *  @param c_idx  The index number of the clause
- *  @param diff   Positive double, Weight taken away from c_idx.
+ *  @param diff   Positive weight, Weight taken away from c_idx.
  */
-void update_neighborhood_on_weight_transfer(const int c_idx, double diff) {
+void update_neighborhoods_on_weight_transfer(const int c_idx, weight diff) {
   int *neighs = neigh_clauses[c_idx];
   const int neigh_size = neigh_sizes[c_idx];
   for (int nc = 0; nc < neigh_size; nc++) {

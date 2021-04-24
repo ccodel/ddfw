@@ -13,7 +13,8 @@
 #include <time.h>
 
 #include "cnf_parser.h"
-#include "clause.h"
+#include "global_data.h"
+#include "assignment.h"
 #include "ddfw.h"
 #include "logger.h"
 #include "neighborhood.h"
@@ -39,6 +40,7 @@ int main(int argc, char *argv[]) {
   // Grab a random seed based on system time
   int seed = (int) time(NULL);
 
+  int num_restarts = 1;
   int ao, Ao, co, Co, d, q, Q, v, w;
   ao = Ao = co = Co = d = q = Q = v = w = 0;
   char *filename = NULL;
@@ -159,9 +161,11 @@ int main(int argc, char *argv[]) {
           return 0;
         }
         break;
+        /*
       case 'z':
         ddfw_reweighting_enabled = 1;
         break;
+        */
       default: print_usage(argv[0]); return 0;
     }
   }
@@ -304,7 +308,7 @@ int main(int argc, char *argv[]) {
   }
   printf("c\n");
 
-  log_str("c All done parsing CLI args, opening file %s\n", filename);
+  log_str("c Opening file %s\n", filename);
   parse_cnf_file(filename);
   initialize_verifier();
 

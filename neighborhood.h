@@ -12,19 +12,23 @@
 #ifndef _NEIGHBORHOOD_H_
 #define _NEIGHBORHOOD_H_
 
-// All of the below are 0-indexed by clause number
+#include "global_data.h"
+
+// All of the below are 0-indexed by clause ID
 extern int *neigh_sizes;
 extern int *neigh_num_sat;      
 extern int **neigh_clauses;       // Indexes (unsorted) of neigh clauses
-extern double *neigh_weights;     // Sum of weights of sat neigh clauses
-extern double *neigh_max_weights; // Weight of max sat neigh clause
+extern weight *neigh_weights;     // Sum of weights of sat neigh clauses
+extern weight *neigh_max_weights; // Weight of max sat neigh clause
 extern int *neigh_max_idxs;       // Index number of max, -1 if changed
 
-void allocate_neighborhoods(void);     // Call after header parsed in
-void compute_neighborhoods(void);      // Call after clauses parsed in
-void initialize_neighborhoods(void);   // Call after initial var assignment
+void allocate_neighborhood_memory(void); // Call after header parsed
+void initialize_neighborhoods(void);     // Call after entire CNF is parsed
 
-void update_neighborhood_on_flip(const int c_idx);
-void update_neighborhood_on_weight_transfer(const int c_idx, const double diff);
+void initialize_neighborhoods_after_assignment(void);
+void initialize_neighborhoods_after_reweighting(void);
+
+void update_neighborhoods_on_flip(const int c_idx);
+void update_neighborhoods_on_weight_transfer(const int c_idx, const weight d);
 
 #endif /* _NEIGHBORHOOD_H_ */

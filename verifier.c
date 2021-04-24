@@ -14,7 +14,7 @@
 
 #include "xmalloc.h"
 #include "verifier.h"
-#include "clause.h"
+#include "assignment.h"
 #include "neighborhood.h"
 #include "weight_transfer.h"
 
@@ -23,14 +23,6 @@
 
 #ifndef ABS
 #define ABS(x)     (((x) < 0) ? -(x) : (x))
-#endif
-
-#ifndef MIN
-#define MIN(x, y)  (((x) < (y)) ? (x) : (y))
-#endif
-
-#ifndef MAX
-#define MAX(x, y)  (((x) > (y)) ? (x) : (y))
 #endif
 
 #define ERR_IF(cond, msg)  if (cond) { fprintf(stderr, msg); exit(-1); }

@@ -14,13 +14,7 @@
 #define _DDFW_H_
 
 /** @brief The version number for the current implementation of DDFW. */
-#define VERSION 5
-
-/** @brief Default randomization seed.
- *
- *  Can be toggled with the -s <seed> flag at the command line.
- */
-#define DEFAULT_RAND_SEED  0xdeadd00d
+#define VERSION 6
 
 /** @brief Defines how the algorithm times out.
  *

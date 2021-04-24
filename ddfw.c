@@ -182,15 +182,14 @@
 #include <getopt.h>
 #include <time.h>
 #include <float.h>
-#include <signal.h>
 
 #include "ddfw.h"
-#include "clause.h"
+#include "assignment.h"
 #include "cnf_parser.h"
 #include "logger.h"
-#include "xmalloc.h"
 #include "neighborhood.h"
 #include "weight_transfer.h"
+#include "weight_reducer.h"
 #include "verifier.h"
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -292,28 +291,28 @@ int timeout_flips = -1;
  *  When the weight of the neighboring clause is at least init_clause_weight,
  *  then "a" is used. Can be specified with the -a <a> command-line option.
  */
-double mult_a = DEFAULT_A;
+weight mult_a = DEFAULT_A;
 
 /** @brief The additive constant in weight transferral.
  *
  *  When the weight of the neighboring clause is at least init_clause_weight,
  *  then "c" is used. Can be specified with the -c <c> command-line option.
  */
-double add_c = DEFAULT_C;
+weight add_c = DEFAULT_C;
 
 /** @brief The multiplicative constant for when beneath init_clause_weight.
  *  
  *  When the weight of the neighboring clause is less than init_clause_weight,
  *  then "A" is used. Can be specified with the -A <A> command-line option.
  */
-double mult_A = DEFAULT_A;
+weight mult_A = DEFAULT_A;
 
 /** @brief The additive constant for when beneath init_clause_weight.
  *
  *  When the weight of the neighboring clause is less than init_clause_weight,
  *  then "C" is used. Can be specified with the -C <C> command-line option.
  */
-double add_C = DEFAULT_C;
+weight add_C = DEFAULT_C;
 
 /** @brief Suppresses the printing of a solution if found. 
  * 
@@ -339,76 +338,13 @@ available_weight_option_t available_weight_opt = RAW;
 // DDFW algorithm implementation
 ///////////////////////////////////////////////////////////////////////////////
 
-/** @brief Finds the literals that cause a decrease in the total amount of
- *         weight held by unsatisfied clauses if flipped and stores their
- *         indexes into the array cost_reducing_vars.
- *
- *  According to the DDFW algorithm, the first thing done per each loop body
- *  is to "find and return a list L of literals causing the greatest reduction
- *  in weighted cost delta(w) when flipped." While the list L could be computed 
- *  by looping over every literal, every loop, that would result in much 
- *  redundant computation, as only those literals involved in a clause with a 
- *  flipped literal would have their cost calculations change.
- *
- *  As a result, flipping literals causes variable indexes to be stored in 
- *  cost_compute_vars, which acts as a sort of stack. This function pops off
- *  every variable index in the stack and re-computes its delta(w). If
- *  delta(w) is strictly positive, the variable index is added to the list
- *  of cost reducing variables.
- */
-static void find_cost_reducing_literals() {
-  // Loop through those variables in the cost_compute_vars
-  // Most efficient to do from the back of the cost compute vars array
-  int *cc_vars = cost_compute_vars + num_cost_compute_vars - 1;
-  const int num_cc_vars = num_cost_compute_vars;
-  for (int i = 0; i < num_cc_vars; i++) {
-    const int v_idx = *cc_vars;
-    const int l_idx = LIT_IDX(v_idx);
-    const int assigned = ASSIGNMENT(l_idx);
-    double satisfied_weight = 0.0;
-    double unsatisfied_weight = 0.0;
-
-    // Determine the index of the true literal
-    int true_idx, false_idx;
-    if (assigned) {
-      true_idx = l_idx;
-      false_idx = NEGATED_IDX(l_idx);
-    } else {
-      true_idx = NEGATED_IDX(l_idx);
-      false_idx = l_idx;
-    }
-
-    // Check clauses containing the true literal for ones that can become unsat
-    unsatisfied_weight = literal_crit_sat_weights[true_idx];
-
-    // Check clauses containing the false literal for those that can become sat
-    satisfied_weight = literal_unsat_weights[false_idx];
-
-    // Determine if flipping the truth value of the true literal
-    //   would result in more satisfied weight than unsatisfied weight
-    const double diff = satisfied_weight - unsatisfied_weight;
-    if (diff > 0.0) {
-      add_cost_reducing_var(v_idx, diff);
-    } else if (diff <= 0.0) {
-      remove_cost_reducing_var(v_idx);
-    }
-
-    // Remove var from compute list
-    remove_cost_compute_var(v_idx);
-    cc_vars--;
-  }
-
-  verify_cost_reducing_vars();
-}
-
-
 /** @brief Runs the DDFW algorithm.
  *
  *  Main loop.
  */
 void run_ddfw_algorithm() {
 
-  reset_clause_for_alg_run();
+  initialize_global_data_for_alg_run();
   generate_random_assignment();
 
   // Record the time to ensure no timeout
@@ -427,38 +363,34 @@ void run_ddfw_algorithm() {
     verify_clauses_and_assignment();
     verify_crit_sat_unsat_weights();
 
-    find_cost_reducing_literals();
+    compute_weight_reducing_variables();
     
-    // See if any literals will reduce the weight
-    if (num_cost_reducing_vars > 0) {
+    // See if any variables will reduce the weight
+    if (num_unsat_weight_reducing_vars > 0) {
       unsigned int rand_var = 0;
       switch (selection_method) {
         case UNIFORM:
-          rand_var = ((unsigned int) rand()) % num_cost_reducing_vars;
+          rand_var = ((unsigned int) rand()) % num_unsat_weight_reducing_vars;
           break;
         case WEIGHTED:;
-          double total_so_far = 0.0;
-          double rand_double = ABS(((double) rand()) 
-              / ((double) RAND_MAX) * total_cost_reducing_weight);
-          double *ws = cost_reducing_weights;
+          weight total_so_far = 0.0;
+          weight rand_double = ABS((((weight) rand()) 
+              / ((weight) RAND_MAX)) * total_unsat_weight_reducing_weight);
 
           // Loop through the weights until found total greater than rand_d
-          for (int i = 0; i < num_cost_reducing_vars; i++) {
-            total_so_far += *ws;
+          for (int i = 0; i < num_unsat_weight_reducing_vars; i++) {
+            total_so_far += unsat_weight_reducing_weights[i];
             if (rand_double <= total_so_far) {
               rand_var = i;
               break;
             }
-
-            ws++;
           }
           break;
         case BEST:;
-          double best_weight = DBL_MAX;
+          weight best_weight = DBL_MAX;
           int best_idx = 0;
-          ws = cost_reducing_weights;
-          for (int i = 0; i < num_cost_reducing_vars; i++) {
-            const double w = *ws;
+          for (int i = 0; i < num_unsat_weight_reducing_vars; i++) {
+            const weight w = unsat_weight_reducing_weights[i];
             if (w < best_weight) {
               best_weight = w;
               best_idx = i;
@@ -472,9 +404,9 @@ void run_ddfw_algorithm() {
           exit(-1);
       }
 
-      var_to_flip = cost_reducing_vars[rand_var];
+      var_to_flip = unsat_weight_reducing_vars[rand_var];
     } else if (((unsigned int) rand()) % RANDOM_WALK_DEN < RANDOM_WALK_NUM) {
-      var_to_flip = ((unsigned int) rand()) % num_vars;
+      var_to_flip = (((unsigned int) rand()) % num_vars) + 1;
     } else {
       distribute_weights();
       goto check_timeout;
@@ -491,9 +423,10 @@ void run_ddfw_algorithm() {
     */
 
     // Log in-run statistics if the rate is reached
+    // TODO get these from global values
     if (weight_statistics_log_rate > 0 && 
         num_flips % weight_statistics_log_rate == 0) {
-      double average = get_transfer_average();
+      weight average = get_transfer_average();
       log_weight_statistics(algorithm_run, num_weight_transfers, average);
     }
 
@@ -509,9 +442,6 @@ check_timeout:
       if (timeout_loop_counter == 0) {
         timeout_loop_counter = LOOPS_PER_TIMEOUT_CHECK;
         gettimeofday(&stop_time, NULL);
-
-        log_str("c %d unsatisfied clauses after %d flips\n",
-            num_unsat_clauses, num_flips);
 
         // Check for timeout
         if (stop_time.tv_sec - start_time.tv_sec >= timeout_secs)
