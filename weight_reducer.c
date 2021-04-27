@@ -129,9 +129,7 @@ static void compute_literal_critical_weights(void) {
       }
     } else if (num_true_lits == 1) {
       // Flipping the true variable to false would decrease the satisfied weight
-      for (int l = 0; l < clause_size; l++) {
-        literal_critical_sat_weights[clause_lit_masks[i]] += w;
-      }
+      literal_critical_sat_weights[clause_lit_masks[i]] += w;
     }
   }
 }
@@ -170,8 +168,10 @@ void compute_weight_reducing_variables(void) {
   }
 
   num_unsat_weight_compute_vars = 0;
-  // TODO
-  // verify_weight_reducing_variables();
+
+  // This does nothing if DEBUG is not on
+  // TODO give this responsibility to the verifier.c
+  verify_weight_reducer();
 }
 
 void compute_weight_reducing_after_assignment(void) {
@@ -185,3 +185,73 @@ void compute_weight_reducing_after_reweighting(void) {
   compute_literal_critical_weights();
   compute_weight_reducing_variables();
 }
+
+/** @brief Verifies the internal consistency of the weight reducer structs.
+ *
+ *  First calculates the critical weight values, then verifies that the current
+ *  state of weight reducing variables agrees with hard-computed values.
+ */
+#ifdef DEBUG
+void verify_weight_reducer(void) {
+  // First, we check that unsat/critical weights are correct, by literal
+  for (int l = 2; l <= num_literals + 2; l++) {
+    weight sat_w = 0;
+    weight unsat_w = 0;
+    const int is_true = ASSIGNMENT(l);
+
+    // Loop through the clauses for this literal, add appropriate weights
+    const int occ = literal_occ[l];
+    int *clauses = literal_clauses[l];
+    for (int c = 0; c < occ; c++) {
+      const int c_idx = clauses[c];
+      if (is_true && clause_num_true_lits[c_idx] == 1) {
+        sat_w += clause_weights[c_idx];
+      } else if (clause_num_true_lits[c_idx] == 0) {
+        unsat_w += clause_weights[c_idx];
+      }
+    }
+
+    if (is_true) {
+      ERR_IF(ABS(literal_critical_sat_weights[l] - sat_w) > 0.1, "Crit sat\n")
+    }
+
+    ERR_IF(ABS(literal_unsat_weights[l] - unsat_w) > 0.1, "Unsat w\n")
+  }
+
+  // Next, compute weight reducing all by hand
+  // NOTE: We can use the critical weight structs since we just checked those
+  weight total_wrw = 0;
+  int num_weight_reducing = 0;
+
+  for (int v = 0; v <= num_vars; v++) {
+    const int l_idx = LIT_IDX(v);
+    const int assigned = ASSIGNMENT(l_idx);
+    const int true_idx = (assigned) ? l_idx : NEGATED_IDX(l_idx);
+    const int false_idx = NEGATED_IDX(true_idx);
+    const int true_occ = literal_occ[true_idx];
+    const int false_occ = literal_occ[false_idx];
+
+    const weight diff = literal_unsat_weights[false_idx] - 
+                        literal_critical_sat_weights[true_idx];
+    const weight curr_diff = unsat_weight_reducing_weights[v];
+    if (diff > 0) {
+      // Check to see if in the list
+      ERR_IF(unsat_weight_reducing_idxs[v] == -1, "Weight reducing idxs\n")
+      ERR_IF(ABS(diff - curr_diff) > 1, "Weight reducing diffs\n")
+      num_weight_reducing++;
+      total_wrw += diff;
+    } else {
+      ERR_IF(unsat_weight_reducing_idxs[v] != -1, "!Weight reducing idxs\n")
+      ERR_IF(ABS(diff - curr_diff) > 1, "!Weight reducing diff\n")
+    }
+  }
+
+  ERR_IF(num_weight_reducing != num_weight_reducing_vars, "Num wr vars\n")
+  ERR_IF(ABS(total_weight_reducing_weight - total_wrw) > 1, "Total wrw\n")
+}
+
+#else
+
+void verify_weight_reducer(void) { (void) 0; }
+
+#endif /* DEBUG */

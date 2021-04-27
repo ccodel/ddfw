@@ -19,7 +19,6 @@
 #include "logger.h"
 #include "neighborhood.h"
 #include "weight_transfer.h"
-#include "verifier.h"
 
 /** Calculates the absolute value of the number passed in. */
 #ifndef ABS
@@ -310,7 +309,6 @@ int main(int argc, char *argv[]) {
 
   log_str("c Opening file %s\n", filename);
   parse_cnf_file(filename);
-  initialize_verifier();
 
   // Run the algorithm as many times as specified at the command-line
   srand(seed);

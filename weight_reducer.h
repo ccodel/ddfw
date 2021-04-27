@@ -37,5 +37,6 @@ void compute_weight_reducing_variables(void);
 void compute_weight_reducing_after_assignment(void);
 void compute_weight_reducing_after_reweighting(void);
 
+void verify_weight_reducer(void);
 
 #endif /* _WEIGHT_REDUCER_H_ */

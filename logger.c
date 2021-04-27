@@ -27,6 +27,7 @@
 #include "logger.h"
 #include "global_data.h"
 #include "assignment.h"
+#include "weight_reducer.h"
 
 #ifndef ABS
 #define ABS(x)   (((x) < 0) ? -(x) : (x))
@@ -253,16 +254,18 @@ void log_reducing_cost_lits(void) {
   if (vlevel == SILENT)
     return;
 
-  // printf("c Found %d cost reducing literals\n", num_cost_reducing_vars);
-
-  /*
-  for (int i = 0; i < num_cost_reducing_vars; i++) {
-    int l_idx = LIT_IDX(cost_reducing_vars[i]);
+  printf("c Found %d cost reducing literals\n", num_unsat_weight_reducing_vars);
+  //for (int i = 0; i < num_unsat_weight_reducing_vars; i++) {
+  //  int l_idx = LIT_IDX(unsat_weight_reducing_vars[i]);
+  for (int v = 1; v <= num_vars; v++) {
+    int l_idx = LIT_IDX(v);
     int not_l_idx = NEGATED_IDX(l_idx);
     int assigned = ASSIGNMENT(l_idx);
 
     printf("c %d (var %d) is cost reducing, current truth value %d\n",
         l_idx, VAR_IDX(l_idx), assigned);
+    printf("c Crit sat %lf, unsat %lf\n", literal_critical_sat_weights[l_idx],
+        literal_unsat_weights[l_idx]);
     if (vlevel == VERBOSE) {
       printf("c   Critical clauses for this literal:\n");
 
@@ -297,7 +300,6 @@ void log_reducing_cost_lits(void) {
       }
     }
   }
-  */
 }
 
 

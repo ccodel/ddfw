@@ -20,6 +20,8 @@ void generate_random_assignment(void);
 void flip_variable(const int v_idx);
 void restore_to_best_assignment(void);
 
+void verify_clauses_and_assignment(void);
+
 /** Implementation of DDFW+ weight toggle */
 /*
 extern long ddfw_plus_counter;

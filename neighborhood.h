@@ -31,4 +31,6 @@ void initialize_neighborhoods_after_reweighting(void);
 void update_neighborhoods_on_flip(const int c_idx);
 void update_neighborhoods_on_weight_transfer(const int c_idx, const weight d);
 
+void verify_neighborhoods();
+
 #endif /* _NEIGHBORHOOD_H_ */

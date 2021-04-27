@@ -359,10 +359,9 @@ void run_ddfw_algorithm() {
 
   int var_to_flip;
   while (num_unsat_clauses > 0) {
-    // As we loop, verify various components and data structures
-    verify_clauses_and_assignment();
-    verify_crit_sat_unsat_weights();
+    for (int l = 2; l <= num_literals + 2; l++) {
 
+    }
     compute_weight_reducing_variables();
     
     // See if any variables will reduce the weight
@@ -409,10 +408,12 @@ void run_ddfw_algorithm() {
       var_to_flip = (((unsigned int) rand()) % num_vars) + 1;
     } else {
       distribute_weights();
+      verify_after_weight_transfer();
       goto check_timeout;
     }
 
     flip_variable(var_to_flip);
+    verify_after_flip(); // Does nothing if DEBUG not defined
 
     // Determine if it's been too long since an improvement
     /*

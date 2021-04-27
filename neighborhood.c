@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <limits.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "neighborhood.h"
@@ -24,6 +25,10 @@
 #include "verifier.h"
 #include "xmalloc.h"
 #include "logger.h"
+
+#ifndef ABS
+#define ABS(x)   (((x) < 0) ? -(x) : (x))
+#endif
 
 /** @brief The size of each neighborhood.
  *
@@ -231,8 +236,6 @@ void update_neighborhoods_on_flip(const int c_idx) {
       neighs++;
     }
   }
-
-  verify_neighborhoods();
 }
 
 
@@ -257,6 +260,42 @@ void update_neighborhoods_on_weight_transfer(const int c_idx, weight diff) {
 
     neighs++;
   }
+}
 
-  verify_neighborhoods();
+/** @brief Checks the validity of the neighborhood struct.
+ * 
+ *  Checks the validity of the neighborhood global structures.
+ *  Includes checking that the number of satisfied clauses in each
+ *  neighborhood, the sum of sat weights, and the max weights are all correct.
+ */
+void verify_neighborhoods(void) {
+  for (int c = 0; c < num_clauses; c++) {
+    int num_sat = 0;
+    weight w = 0;
+    weight max_w = 0;
+
+    // Traverse the clauses in the neighborhood
+    int *clauses = neigh_clauses[c];
+    const int size = neigh_sizes[c];
+    for (int i = 0; i < size; i++) {
+      const int c_idx = clauses[i];
+      if (clause_num_true_lits[c_idx] > 0) {
+        num_sat++;
+        w += clause_weights[c_idx];
+        if (clause_weights[c_idx] > max_w) {
+          max_w = clause_weights[c_idx];
+        }
+      }
+    }
+
+    // Once done with this neighborhood, check computed stats
+    ERR_IF(neigh_num_sat[c] != num_sat, "Neigh num sat\n")
+    ERR_IF(ABS(neigh_weights[c] - w) > 0.1, "Neigh weights\n")
+    if (neigh_max_idxs[c] != -1) {
+      ERR_IF(ABS(neigh_max_weights[c] - max_w) > 0.1, "Neigh max weights\n")
+      ERR_IF(clause_num_true_lits[neigh_max_idxs[c]] == 0, "Neigh max idx\n")
+      ERR_IF(ABS(clause_weights[neigh_max_idxs[c]] - max_w) > 0.1,
+          "Verification of neigh max weight\n")
+    }
+  }
 }

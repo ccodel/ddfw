@@ -165,7 +165,6 @@ void generate_random_assignment(void) {
 
   initialize_structures_after_assignment();
   best_num_unsat_clauses = num_unsat_clauses;
-  verify_clauses_and_assignment();
 }
 
 /** @brief Takes an index of a variable to flip and flips it in the assignment.
@@ -181,7 +180,7 @@ void flip_variable(const int v_idx) {
 
   // Determine which literal has the truth value, to flip correct clauses
   const int a = assignment[v_idx];
-  const int true_idx = (a) ? LIT_IDX(v_idx) : NEGATED_IDX(LIT_IDX(v_idx));;
+  const int true_idx = (a) ? LIT_IDX(v_idx) : NEGATED_IDX(LIT_IDX(v_idx));
   const int false_idx = NEGATED_IDX(true_idx);
 
   const int true_occ = literal_occ[true_idx];
@@ -198,7 +197,7 @@ void flip_variable(const int v_idx) {
 
     clause_num_true_lits[c_idx]--;
     const int true_lits = clause_num_true_lits[c_idx];
-    clause_lit_masks[c_idx] ^= true_idx;
+    clause_lit_masks[c_idx] ^= false_idx;
 
     // In the case where the clause now has 0 true literals,
     //   all literals become critical, and may be added to cost compute
@@ -286,4 +285,42 @@ void restore_to_best_assignment(void) {
   num_flips_since_improvement = 0;
   initialize_structures_after_assignment();
   verify_clauses_and_assignment();
+}
+
+/** @brief Verifies the internal consistency of clauses under the assignment.
+ *
+ *  Checks that the clauses are satisfied by the number of literals that
+ *  the clause_num_true_lits array claims they are.
+ */
+void verify_clauses_and_assignment(void) {
+  int unsat_clause_counter = 0;
+
+  for (int c = 0; c < num_clauses; c++) {
+    const int clause_size = clause_sizes[c];
+    const int num_true_lits = clause_num_true_lits[c];
+    int *literals = clause_literals[c];
+    int true_lit = -1; // To compare against mask value
+    int true_mask = 0;
+
+    int true_lit_counter = 0;
+    for (int l = 0; l < clause_size; l++) {
+      if (ASSIGNMENT(literals[l])) {
+        true_lit = literals[l];
+        true_lit_counter++;
+        true_mask ^= literals[l];
+      }
+    }
+
+    ERR_IF(true_lit_counter != num_true_lits, "True literal count\n")
+    if (true_lit_counter == 0) {
+      unsat_clause_counter++;    
+    } else {
+      ERR_IF(clause_lit_masks[c] != true_mask, "Mask lit\n")
+      if (true_lit_counter == 1) {
+        ERR_IF(clause_lit_masks[c] != true_lit, "Single mask lit\n")
+      }
+    }
+  }
+
+  ERR_IF(unsat_clause_counter != num_unsat_clauses, "Unsat clause num\n")
 }

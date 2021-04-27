@@ -16,6 +16,7 @@
 #include "weight_reducer.h"
 #include "assignment.h"
 #include "neighborhood.h"
+#include "verifier.h"
 
 #include <stdio.h>
 
@@ -32,6 +33,9 @@ void initialize_structures_after_assignment(void) {
   compute_unsat_after_assignment();
   compute_weight_reducing_after_assignment();
   initialize_neighborhoods_after_assignment();
+
+  // Does not run anything if DEBUG is not enabled
+  verify_after_assignment();
 }
 
 /** @brief Compute structures after the clause weights change by more than one
@@ -40,4 +44,7 @@ void initialize_structures_after_assignment(void) {
 void initialize_structures_after_reweighting(void) {
   compute_weight_reducing_after_reweighting();
   initialize_neighborhoods_after_reweighting();
+
+  // Does not run anything if DEBUG is not enabled
+  verify_after_reweighting();
 }

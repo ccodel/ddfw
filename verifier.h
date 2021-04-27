@@ -12,15 +12,11 @@
 #ifndef _VERIFIER_H_
 #define _VERIFIER_H_
 
-// Call during initialization stage
-void initialize_verifier(void);
+#define ERR_IF(cond, msg)  if (cond) { fprintf(stderr, msg); exit(-1); }
 
-// For neighborhood.c
-void verify_neighborhoods(void);
-
-// For ddfw.c
-void verify_crit_sat_unsat_weights(void);
-void verify_clauses_and_assignment(void);
-void verify_cost_reducing_vars(void);
+void verify_after_flip(void);
+void verify_after_weight_transfer(void);
+void verify_after_assignment(void);
+void verify_after_reweighting(void);
 
 #endif /* _VERIFIER_H_ */
