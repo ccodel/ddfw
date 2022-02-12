@@ -4,7 +4,7 @@
 This repository contains an implementation of the "Divide and Distribute Fixed Weights" algorithm presented in the paper ["Neighbourhood Clause Weight Redistribution in Local Search for SAT"](https://www.researchgate.net/publication/29453919_Neighbourhood_Clause_Weight_Redistribution_in_Local_Search_for_SAT "DDFW paper") by Ishtaiwi, Thornton, Sattar, and Pham. The implementation in this repository differs from the original paper in that the clause weights are floating point numbers instead of integers, which allows for greater expression in the kinds of weight distribution policies available to the algorithm.
 
 ## Compilation
-To compile, simply type
+To compile, change your directory to `src/` and type
 ```bash
 make
 ```
